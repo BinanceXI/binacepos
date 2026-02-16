@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+
+    <!-- ✅ Correct mobile viewport (keep user-scalable off if you want) -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+    />
+
+    <title>BinanceXI POS</title>
+    <meta name="description" content="BinanceXI POS - Offline-first point of sale system" />
+    <meta name="author" content="Binance Labs (BinanceXI)" />
+    <meta name="theme-color" content="#0b1220" />
+
+    <!-- PWA-ish -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- OpenGraph -->
+    <meta property="og:title" content="BinanceXI POS" />
+    <meta property="og:description" content="Offline-first point of sale system" />
+    <meta property="og:type" content="website" />
+
+    <style>
+      /* Safe-area helpers (iPhone notch) */
+      :root {
+        --safe-top: env(safe-area-inset-top);
+        --safe-right: env(safe-area-inset-right);
+        --safe-bottom: env(safe-area-inset-bottom);
+        --safe-left: env(safe-area-inset-left);
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

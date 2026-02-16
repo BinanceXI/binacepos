@@ -1,0 +1,86 @@
+name: Build Android APK (Capacitor)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    env:
+      # ✅ Make Vite actually receive these during build
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Optional: show that env exists (won't print secret value)
+      - name: Check env exists
+        run: |
+          test -n "$VITE_SUPABASE_URL"
+          test -n "$VITE_SUPABASE_ANON_KEY"
+          echo "VITE env looks present."
+
+      - name: Build web (Vite)
+        run: npm run build
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Ensure Android platform exists
+        run: npx cap add android || echo "Android already added"
+
+      - name: Sync Capacitor Android
+        run: npx cap sync android
+
+      # Fix duplicate style blocks (safe)
+      - name: Fix duplicate AppTheme.NoActionBar in styles.xml
+        run: |
+          FILE="android/app/src/main/res/values/styles.xml"
+          if [ -f "$FILE" ]; then
+            COUNT=$(grep -c 'name="AppTheme.NoActionBar"' "$FILE" || true)
+            if [ "$COUNT" -gt 1 ]; then
+              awk '
+                BEGIN {seen=0; skip=0}
+                /<style name="AppTheme\.NoActionBar"/ { if (seen==1) skip=1; seen=1 }
+                skip==1 && /<\/style>/ {skip=0; next}
+                skip==1 {next}
+                {print}
+              ' "$FILE" > "$FILE.tmp" && mv "$FILE.tmp" "$FILE"
+            fi
+          fi
+
+      # Patch legacy proguard default everywhere (capacitor + plugins)
+      - name: Patch legacy proguard-android.txt everywhere
+        run: |
+          find android node_modules/@capacitor -type f -name "*.gradle" -print0 | xargs -0 sed -i \
+            "s/getDefaultProguardFile('proguard-android.txt')/getDefaultProguardFile('proguard-android-optimize.txt')/g"
+          find android node_modules/@capacitor -type f -name "*.gradle" -print0 | xargs -0 sed -i \
+            "s/getDefaultProguardFile(\"proguard-android.txt\")/getDefaultProguardFile(\"proguard-android-optimize.txt\")/g"
+
+      # ✅ Build DEBUG (easy install)
+      - name: Build Android DEBUG APK
+        working-directory: android
+        run: ./gradlew clean assembleDebug
+
+      - name: Upload DEBUG APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk

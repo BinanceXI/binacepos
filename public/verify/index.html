@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Receipt Verification | BinanceXI POS</title>
+    <meta name="robots" content="noindex" />
+    <style>
+      html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+      body { display: grid; place-items: center; background: #0b1220; color: #e5e7eb; padding: 24px; }
+      .card { width: 100%; max-width: 520px; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 18px; background: rgba(255,255,255,0.04); }
+      .muted { color: rgba(229,231,235,0.75); font-size: 14px; }
+      code { background: rgba(0,0,0,0.25); padding: 2px 6px; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div style="font-weight: 800; font-size: 18px;">BinanceXI POS</div>
+      <div class="muted" id="msg" style="margin-top: 8px;">Redirecting to receipt verification...</div>
+    </div>
+
+    <script>
+      function getReceiptId() {
+        const params = new URLSearchParams(window.location.search);
+        const fromQuery = params.get("id") || params.get("receipt_id");
+        if (fromQuery) return fromQuery.trim();
+
+        const parts = window.location.pathname.split("/").filter(Boolean);
+        const verifyIdx = parts.indexOf("verify");
+        if (verifyIdx >= 0 && parts[verifyIdx + 1]) return decodeURIComponent(parts[verifyIdx + 1]);
+
+        return "";
+      }
+
+      const id = getReceiptId();
+      if (!id) {
+        document.getElementById("msg").textContent =
+          "Missing receipt id. Use /verify?id=RECEIPT_ID or /#/verify/RECEIPT_ID";
+      } else {
+        // HashRouter route in the main app.
+        window.location.replace("/#/verify/" + encodeURIComponent(id));
+      }
+    </script>
+  </body>
+</html>
+

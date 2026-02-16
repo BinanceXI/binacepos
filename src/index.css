@@ -1,0 +1,201 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@layer base {
+  :root {
+    --background: 198 55% 97%;
+    --foreground: 207 52% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 207 52% 14%;
+    --card-elevated: 0 0% 100%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 207 52% 14%;
+    --primary: 204 77% 42%;
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 204 77% 35%;
+    --secondary: 204 35% 25%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 201 32% 91%;
+    --muted-foreground: 205 22% 41%;
+    --accent: 195 78% 50%;
+    --accent-foreground: 0 0% 100%;
+    --success: 152 69% 40%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 10%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --info: 204 77% 42%;
+    --info-foreground: 0 0% 100%;
+    --border: 201 28% 84%;
+    --input: 201 28% 84%;
+    --ring: 204 77% 42%;
+    --radius: 0.9rem;
+    --sidebar-background: 204 58% 11%;
+    --sidebar-foreground: 198 70% 92%;
+    --sidebar-primary: 204 77% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 203 44% 17%;
+    --sidebar-accent-foreground: 198 70% 92%;
+    --sidebar-border: 203 40% 20%;
+    --sidebar-ring: 204 77% 50%;
+    --pos-grid-bg: 198 55% 97%;
+    --pos-cart-bg: 0 0% 100%;
+    --pos-product-card: 0 0% 100%;
+    --shadow-sm: 0 1px 2px 0 rgb(10 32 56 / 0.08);
+    --shadow-md: 0 8px 24px -14px rgb(10 32 56 / 0.2);
+    --shadow-lg: 0 24px 52px -26px rgb(9 33 60 / 0.26);
+    --shadow-xl: 0 36px 64px -30px rgb(8 30 54 / 0.3);
+    --shadow-card: 0 10px 24px -18px rgb(9 39 67 / 0.35);
+    --shadow-elevated: 0 24px 64px -34px rgb(9 39 67 / 0.35);
+  }
+
+  .dark {
+    --background: 205 60% 7%;
+    --foreground: 196 80% 94%;
+    --card: 205 53% 11%;
+    --card-foreground: 196 80% 94%;
+    --card-elevated: 205 48% 14%;
+    --popover: 205 53% 11%;
+    --popover-foreground: 196 80% 94%;
+    --primary: 204 77% 50%;
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 204 77% 44%;
+    --secondary: 204 38% 18%;
+    --secondary-foreground: 196 80% 94%;
+    --muted: 205 34% 16%;
+    --muted-foreground: 199 32% 67%;
+    --accent: 195 78% 56%;
+    --accent-foreground: 205 70% 8%;
+    --border: 204 36% 21%;
+    --input: 204 36% 21%;
+    --ring: 204 77% 50%;
+    --sidebar-background: 205 67% 6%;
+    --sidebar-foreground: 196 80% 92%;
+    --sidebar-accent: 204 46% 14%;
+    --pos-grid-bg: 205 60% 7%;
+    --pos-cart-bg: 205 53% 11%;
+    --pos-numpad-bg: 205 50% 13%;
+    --pos-product-card: 205 47% 13%;
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+    --shadow-md: 0 8px 24px -14px rgb(0 0 0 / 0.45);
+    --shadow-lg: 0 24px 52px -26px rgb(0 0 0 / 0.55);
+    --shadow-xl: 0 36px 64px -30px rgb(0 0 0 / 0.6);
+    --shadow-card: 0 16px 30px -20px rgb(0 0 0 / 0.55);
+    --shadow-elevated: 0 26px 64px -34px rgb(0 0 0 / 0.65);
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+
+    html, body {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+
+    /* ✅ allow scrolling, do NOT lock the whole app */
+    overflow: auto;
+
+    /* ✅ mobile correct viewport height */
+    min-height: 100vh;
+    min-height: 100dvh;
+
+    /* ✅ prevent status-bar overlap */
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+
+    /* ✅ better touch behavior */
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
+
+    background:
+      radial-gradient(1200px 560px at -10% -16%, hsl(var(--primary) / 0.17), transparent 58%),
+      radial-gradient(980px 540px at 112% -12%, hsl(var(--accent) / 0.18), transparent 60%),
+      radial-gradient(700px 420px at 50% 112%, hsl(var(--primary) / 0.08), transparent 62%),
+      hsl(var(--background));
+    font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color 240ms ease, color 240ms ease;
+
+    @apply bg-background text-foreground;
+  }
+
+  /* ✅ root should take full height */
+  #root {
+    /* ✅ full usable height after safe-area padding */
+    min-height: calc(100dvh - var(--safe-top) - var(--safe-bottom));
+  }
+
+  .font-mono { font-family: 'JetBrains Mono', monospace; }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .pos-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+  .pos-scrollbar::-webkit-scrollbar-track { @apply bg-transparent; }
+  .pos-scrollbar::-webkit-scrollbar-thumb { @apply bg-slate-700/50 rounded-full; }
+  .pos-scrollbar::-webkit-scrollbar-thumb:hover { @apply bg-slate-600; }
+  .glass { @apply bg-white/70 backdrop-blur-xl; }
+  .glass-dark { @apply bg-slate-950/55 backdrop-blur-xl; }
+  .soft-enter {
+    animation: fade-up 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 🖨️ Receipt printing (58mm thermal) */
+@media print {
+  html, body {
+    width: 58mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: white !important;
+    color: black !important;
+  }
+
+  body * {
+    visibility: hidden;
+    height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  #receipt-print-area, #receipt-print-area * {
+    visibility: visible;
+    height: auto !important;
+    overflow: visible !important;
+    color: black !important;
+    background: white !important;
+  }
+
+  #receipt-print-area {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 58mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: block !important;
+  }
+
+  @page {
+    size: 58mm auto;
+    margin: 0;
+  }
+}

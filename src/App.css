@@ -1,0 +1,21 @@
+/* App.css - Reset for Full Screen POS */
+#root {
+  width: 100%;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  text-align: left; /* Fixes the centered text issue */
+  background-color: transparent;
+}
+
+/* Smooth logo animation */
+@keyframes logo-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .logo-spin {
+    animation: logo-spin infinite 20s linear;
+  }
+}
