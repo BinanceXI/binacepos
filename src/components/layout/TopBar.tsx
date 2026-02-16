@@ -1,6 +1,7 @@
 // File: src/components/TopBar.tsx
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
 import {
   Wifi,
   WifiOff,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 import { usePOS } from "@/contexts/POSContext";
 import { supabase } from "@/lib/supabase";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -25,9 +27,63 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { NotificationPanel } from "@/components/ui/NotificationPanel";
 import { cn } from "@/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
+
+type PlatformAdminSessionBackup = {
+  access_token: string;
+  refresh_token: string;
+  saved_at?: string;
+};
+
+type ImpersonationInfo = {
+  audit_id: string;
+  business_id: string;
+  business_name?: string | null;
+  role: "admin" | "cashier";
+  started_at?: string;
+};
+
+const IMPERSONATION_BACKUP_KEY = "platform_admin_session_backup_v1";
+const IMPERSONATION_INFO_KEY = "platform_admin_impersonation_v1";
+const REACT_QUERY_PERSIST_KEY = "REACT_QUERY_OFFLINE_CACHE";
+
+function safeJSONParse<T>(raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function safeGetItem(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
 
 export const TopBar = () => {
   const { currentUser, syncStatus, setCurrentUser, pendingSyncCount } = usePOS();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  const impersonationInfo = safeJSONParse<ImpersonationInfo>(
+    typeof window !== "undefined" ? safeGetItem(IMPERSONATION_INFO_KEY) : null
+  );
+  const platformBackup = safeJSONParse<PlatformAdminSessionBackup>(
+    typeof window !== "undefined" ? safeGetItem(IMPERSONATION_BACKUP_KEY) : null
+  );
+
+  const isImpersonating = Boolean(
+    impersonationInfo?.audit_id &&
+      platformBackup?.access_token &&
+      platformBackup?.refresh_token &&
+      currentUser &&
+      (currentUser as any)?.role !== "platform_admin"
+  );
+  const [returning, setReturning] = useState(false);
 
   // ✅ keep theme in sync with the DOM (no random default)
   const [isDark, setIsDark] = useState(() =>
@@ -60,6 +116,9 @@ export const TopBar = () => {
     // Always clear local user (offline-first)
     try {
       localStorage.removeItem("binancexi_user");
+      localStorage.removeItem(IMPERSONATION_BACKUP_KEY);
+      localStorage.removeItem(IMPERSONATION_INFO_KEY);
+      localStorage.removeItem(REACT_QUERY_PERSIST_KEY);
       // clear any supabase tokens if present (safe)
       Object.keys(localStorage).forEach((k) => {
         if (k.startsWith("sb-") && k.endsWith("-auth-token")) localStorage.removeItem(k);
@@ -67,9 +126,85 @@ export const TopBar = () => {
     } catch {}
 
     setCurrentUser(null);
+    queryClient.clear();
 
     // Force back to login route without weird double reloads
     window.location.assign("/");
+  };
+
+  const returnToPlatformAdmin = async () => {
+    if (returning) return;
+    if (!platformBackup?.access_token || !platformBackup?.refresh_token) {
+      toast.error("Missing platform admin session backup. Please sign out and sign in again.");
+      return;
+    }
+
+    setReturning(true);
+    try {
+      // Clear cached cross-tenant data before switching auth context.
+      try {
+        localStorage.removeItem(REACT_QUERY_PERSIST_KEY);
+      } catch {
+        // ignore
+      }
+      queryClient.clear();
+
+      const { data: sess, error: sessErr } = await supabase.auth.setSession({
+        access_token: platformBackup.access_token,
+        refresh_token: platformBackup.refresh_token,
+      });
+      if (sessErr || !sess?.session?.access_token) throw sessErr || new Error("Failed to restore admin session");
+
+      // End audit record now that we are back on platform-admin JWT.
+      if (impersonationInfo?.audit_id) {
+        await supabase
+          .from("impersonation_audit")
+          .update({ ended_at: new Date().toISOString() })
+          .eq("id", impersonationInfo.audit_id);
+      }
+
+      // Load the platform admin profile and set as current user.
+      const { data: u, error: uErr } = await supabase.auth.getUser();
+      if (uErr || !u?.user?.id) throw uErr || new Error("Failed to load user");
+
+      const { data: profile, error: pErr } = await supabase
+        .from("profiles")
+        .select("id, username, full_name, role, permissions, active, business_id")
+        .eq("id", u.user.id)
+        .maybeSingle();
+      if (pErr || !profile) throw pErr || new Error("Failed to load profile");
+
+      if ((profile as any)?.active === false) throw new Error("Account disabled");
+      if (String((profile as any)?.role || "") !== "platform_admin") {
+        throw new Error("Restored session is not platform admin");
+      }
+
+      // Clear impersonation markers after successful restore.
+      try {
+        localStorage.removeItem(IMPERSONATION_BACKUP_KEY);
+        localStorage.removeItem(IMPERSONATION_INFO_KEY);
+      } catch {
+        // ignore
+      }
+
+      setCurrentUser({
+        id: String((profile as any).id),
+        full_name: (profile as any).full_name || (profile as any).username,
+        name: (profile as any).full_name || (profile as any).username,
+        username: (profile as any).username,
+        role: (profile as any).role || "platform_admin",
+        permissions: (profile as any).permissions || {},
+        business_id: (profile as any).business_id ?? null,
+        active: true,
+      } as any);
+
+      toast.success("Returned to Platform Admin");
+      navigate("/platform", { replace: true });
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to return to Platform Admin");
+    } finally {
+      setReturning(false);
+    }
   };
 
   const syncDisplay = useMemo(() => {
@@ -122,12 +257,30 @@ export const TopBar = () => {
       className={cn(
         // ✅ sticky so it stays clean while scrolling
         "sticky top-0 z-40",
-        "h-14 md:h-16",
+        isImpersonating ? "h-[92px] md:h-[104px]" : "h-14 md:h-16",
         "border-b border-border/70",
         "bg-background/72 backdrop-blur-xl supports-[backdrop-filter]:bg-background/58"
       )}
     >
-      <div className="h-full px-3 md:px-4 flex items-center justify-between gap-3">
+      {isImpersonating && (
+        <div className="px-3 md:px-4 pt-2">
+          <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-amber-200 truncate">
+                Support Mode
+              </div>
+              <div className="text-[11px] text-muted-foreground truncate">
+                {impersonationInfo?.business_name ? `Business: ${impersonationInfo.business_name}` : "Impersonating a business session"}
+              </div>
+            </div>
+            <Button size="sm" variant="outline" disabled={returning} onClick={returnToPlatformAdmin}>
+              {returning ? "Returning…" : "Return to Platform Admin"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className={cn("px-3 md:px-4 flex items-center justify-between gap-3", isImpersonating ? "h-14 md:h-16" : "h-full")}>
         {/* LEFT: Status */}
         <div className="flex items-center gap-3 min-w-0">
           <motion.div

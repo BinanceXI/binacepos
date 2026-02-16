@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { usePOS } from "@/contexts/POSContext";
 import { BRAND } from "@/lib/brand";
+import { secureTime } from "@/lib/secureTime";
 import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -61,7 +62,7 @@ function saveBillingCache(businessId: string, cache: BillingCache) {
   }
 }
 
-function computeState(b: BillingRow | null, businessStatus: string | null): AccessState {
+function computeState(b: BillingRow | null, businessStatus: string | null, nowMs: number): AccessState {
   if (!b) return "locked";
   if (businessStatus === "suspended") return "locked";
   if (b.locked_override) return "locked";
@@ -69,9 +70,9 @@ function computeState(b: BillingRow | null, businessStatus: string | null): Acce
   const paid = new Date(b.paid_through);
   if (Number.isNaN(paid.getTime())) return "locked";
 
-  if (Date.now() <= paid.getTime()) return "active";
+  if (nowMs <= paid.getTime()) return "active";
   const graceEnd = paid.getTime() + (Number(b.grace_days || 0) || 0) * 24 * 60 * 60 * 1000;
-  if (Date.now() <= graceEnd) return "grace";
+  if (nowMs <= graceEnd) return "grace";
   return "locked";
 }
 
@@ -141,7 +142,8 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
   // if the app stays open for hours.
   // eslint-disable-next-line @typescript-eslint/no-unused-expressions
   clockTick;
-  const state: AccessState = computeState(data?.billing ?? null, data?.businessStatus ?? null);
+  const nowMs = secureTime.timestamp();
+  const state: AccessState = computeState(data?.billing ?? null, data?.businessStatus ?? null, nowMs);
 
   // Platform admin is never subscription-gated.
   if (role === "platform_admin") return <>{children}</>;

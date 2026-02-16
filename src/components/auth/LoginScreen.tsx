@@ -285,7 +285,14 @@ export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
 
       if (localUser) {
         let cloudUser: Awaited<ReturnType<typeof ensureOnlineSession>> | null = null;
-        if (navigator.onLine) {
+        const isPlatformAdmin = String((localUser as any)?.role || "") === "platform_admin";
+        if (isPlatformAdmin) {
+          if (!navigator.onLine) {
+            throw new Error("Platform admin requires an internet connection. Connect and sign in again.");
+          }
+          // Platform admin must have a cloud session; do not allow local-only sign-in.
+          cloudUser = await ensureOnlineSession(u, password);
+        } else if (navigator.onLine) {
           try {
             cloudUser = await ensureOnlineSession(u, password);
           } catch (cloudErr: any) {

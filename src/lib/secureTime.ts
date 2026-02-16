@@ -3,22 +3,75 @@
 
 interface TimeSource {
   url: string;
+  method?: "GET" | "POST";
+  headers?: Record<string, string>;
+  body?: any;
   parseTime: (response: any) => number;
 }
 
 class SecureTimeService {
   private serverOffset: number = 0;
   private lastSync: number = 0;
-  private readonly SYNC_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  private readonly DEFAULT_SYNC_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  private readonly MAX_SYNC_INTERVAL = 30 * 60 * 1000; // 30 minutes
+  private currentSyncInterval = this.DEFAULT_SYNC_INTERVAL;
   private isInitialized: boolean = false;
+  private syncTimer: number | null = null;
+  private lastWarnAt: number = 0;
+  private readonly WARN_INTERVAL = 60 * 60 * 1000; // 1 hour
 
-  // Time sources to try
-  private timeSources: TimeSource[] = [
-    {
-      url: 'https://worldtimeapi.org/api/timezone/Etc/UTC',
-      parseTime: (data) => new Date(data.utc_datetime).getTime()
-    },
-  ];
+  private readonly CACHE_KEY = "binancexi_secure_time_v1";
+
+  // Time sources to try (ordered)
+  private timeSources: TimeSource[] = (() => {
+    const url = (import.meta as any)?.env?.VITE_SUPABASE_URL as string | undefined;
+    const anonKey = (import.meta as any)?.env?.VITE_SUPABASE_ANON_KEY as string | undefined;
+
+    const supabaseUrl = String(url || "").replace(/\/+$/, "");
+    const key = String(anonKey || "").trim();
+
+    const supabaseHeaders =
+      supabaseUrl && key
+        ? {
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+            "Content-Type": "application/json",
+          }
+        : null;
+
+    const sources: TimeSource[] = [];
+
+    // 1) Supabase RPC (preferred, no external dependency)
+    if (supabaseHeaders && supabaseUrl) {
+      sources.push({
+        url: `${supabaseUrl}/rest/v1/rpc/server_time`,
+        method: "POST",
+        headers: supabaseHeaders,
+        body: {},
+        parseTime: (data) => Number(data?.unix_ms ?? NaN),
+      });
+    }
+
+    // 2) Supabase Edge Function (fallback)
+    if (supabaseHeaders && supabaseUrl) {
+      sources.push({
+        url: `${supabaseUrl}/functions/v1/server_time`,
+        method: "POST",
+        headers: supabaseHeaders,
+        body: {},
+        parseTime: (data) => Number(data?.unix_ms ?? NaN),
+      });
+    }
+
+    // 3) Last resort: public time API (often blocked/unreliable)
+    sources.push({
+      url: "https://worldtimeapi.org/api/timezone/Etc/UTC",
+      method: "GET",
+      parseTime: (data) => new Date(data?.utc_datetime).getTime(),
+    });
+
+    return sources;
+  })();
 
   // Fallback: Use a calculated offset based on initial page load
   private initialLoadTime: number;
@@ -27,15 +80,63 @@ class SecureTimeService {
   constructor() {
     this.initialLoadTime = Date.now();
     this.initialPerformanceNow = performance.now();
+    this.loadCache();
     this.initialize();
+  }
+
+  private loadCache() {
+    try {
+      const raw = localStorage.getItem(this.CACHE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as any;
+      const off = Number(parsed?.serverOffset);
+      const last = Number(parsed?.lastSync);
+      if (Number.isFinite(off)) this.serverOffset = off;
+      if (Number.isFinite(last)) this.lastSync = last;
+    } catch {
+      // ignore
+    }
+  }
+
+  private saveCache() {
+    try {
+      localStorage.setItem(
+        this.CACHE_KEY,
+        JSON.stringify({
+          serverOffset: this.serverOffset,
+          lastSync: this.lastSync,
+          savedAt: Date.now(),
+        })
+      );
+    } catch {
+      // ignore
+    }
   }
 
   private async initialize() {
     await this.syncTime();
     this.isInitialized = true;
-    
-    // Periodic sync
-    setInterval(() => this.syncTime(), this.SYNC_INTERVAL);
+
+    // Periodic sync with backoff.
+    this.scheduleNextSync();
+  }
+
+  private scheduleNextSync() {
+    if (this.syncTimer != null) window.clearTimeout(this.syncTimer);
+    this.syncTimer = window.setTimeout(() => {
+      void this.syncTime().finally(() => this.scheduleNextSync());
+    }, this.currentSyncInterval);
+  }
+
+  private warnOnce(msg: string, extra?: any) {
+    const now = Date.now();
+    if ((import.meta as any)?.env?.DEV) {
+      console.warn(msg, extra ?? "");
+      return;
+    }
+    if (now - this.lastWarnAt < this.WARN_INTERVAL) return;
+    this.lastWarnAt = now;
+    console.warn(msg);
   }
 
   private async syncTime(): Promise<void> {
@@ -45,25 +146,39 @@ class SecureTimeService {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 3000);
 
-        const response = await fetch(source.url, { 
+        const response = await fetch(source.url, {
+          method: source.method || "GET",
           signal: controller.signal,
-          cache: 'no-store'
+          cache: "no-store",
+          headers: source.headers,
+          body: source.method === "POST" ? JSON.stringify(source.body ?? {}) : undefined,
         });
         clearTimeout(timeoutId);
 
         if (response.ok) {
-          const data = await response.json();
-          const serverTime = source.parseTime(data);
+          const data = await response.json().catch(() => ({}));
+          const serverTime = Number(source.parseTime(data));
+          if (!Number.isFinite(serverTime)) {
+            throw new Error("Invalid time payload");
+          }
           const localTime = Date.now();
           this.serverOffset = serverTime - localTime;
           this.lastSync = localTime;
-          console.log('[SecureTime] Synced with server, offset:', this.serverOffset);
+          this.currentSyncInterval = this.DEFAULT_SYNC_INTERVAL;
+          this.saveCache();
+
+          if ((import.meta as any)?.env?.DEV) {
+            console.log("[SecureTime] Synced, offset:", this.serverOffset);
+          }
           return;
         }
       } catch (error) {
-        console.warn('[SecureTime] Failed to sync with source:', source.url);
+        this.warnOnce(`[SecureTime] Failed to sync with source: ${source.url}`);
       }
     }
+
+    // Backoff on failure (cap at MAX).
+    this.currentSyncInterval = Math.min(this.MAX_SYNC_INTERVAL, Math.max(this.DEFAULT_SYNC_INTERVAL, this.currentSyncInterval * 2));
 
     // Fallback: Use performance.now() to detect time manipulation
     // If local time doesn't match expected elapsed time, something is wrong
@@ -140,7 +255,7 @@ class SecureTimeService {
   // Check if sync is current
   public isSynced(): boolean {
     const timeSinceSync = Date.now() - this.lastSync;
-    return timeSinceSync < this.SYNC_INTERVAL;
+    return timeSinceSync < this.DEFAULT_SYNC_INTERVAL;
   }
 
   public getOffset(): number {

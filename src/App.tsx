@@ -11,6 +11,7 @@ import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persist
 
 import { POSProvider, usePOS } from "./contexts/POSContext";
 import { LoginScreen } from "./components/auth/LoginScreen";
+import { CloudSessionGate } from "./components/auth/CloudSessionGate";
 import { MainLayout } from "./components/layout/MainLayout";
 import { SubscriptionGate } from "./components/billing/SubscriptionGate";
 
@@ -61,9 +62,11 @@ const AppRoutes = () => {
           <Route
             path="/platform"
             element={
-              <MainLayout>
-                <PlatformAdminPage />
-              </MainLayout>
+              <CloudSessionGate>
+                <MainLayout>
+                  <PlatformAdminPage />
+                </MainLayout>
+              </CloudSessionGate>
             }
           />
           <Route path="*" element={<Navigate to="/platform" replace />} />
