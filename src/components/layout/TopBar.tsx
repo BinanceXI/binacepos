@@ -32,6 +32,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { FeedbackDialog } from "@/components/feedback/FeedbackDialog";
 import { flushFeedbackQueue, getQueuedFeedbackCount } from "@/lib/feedbackQueue";
 import { demoEntryPath, isDemoEntry } from "@/lib/demoEntry";
+import { clearClientIndexedDb, clearClientStorage } from "@/lib/sessionCleanup";
 
 type PlatformAdminSessionBackup = {
   access_token: string;
@@ -177,18 +178,9 @@ export const TopBar = () => {
       // Ignore if offline / fails
     }
 
-    // Always clear local user (offline-first)
-    try {
-      localStorage.removeItem("binancexi_user");
-      localStorage.removeItem(IMPERSONATION_BACKUP_KEY);
-      localStorage.removeItem(IMPERSONATION_INFO_KEY);
-      localStorage.removeItem(REACT_QUERY_PERSIST_KEY);
-      localStorage.removeItem(DEMO_EXPIRES_KEY);
-      // clear any supabase tokens if present (safe)
-      Object.keys(localStorage).forEach((k) => {
-        if (k.startsWith("sb-") && k.endsWith("-auth-token")) localStorage.removeItem(k);
-      });
-    } catch {}
+    // Always clear local user + scoped tenant caches (offline-first).
+    clearClientStorage({ includeDemoExpires: true });
+    await clearClientIndexedDb();
 
     setCurrentUser(null);
     queryClient.clear();

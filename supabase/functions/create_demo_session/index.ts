@@ -259,7 +259,7 @@ serve(async (req) => {
     // Opportunistic cleanup (bounded, best-effort).
     await cleanupExpiredDemoTenants(admin);
 
-    const ttlHours = clampInt(intEnv("DEMO_TTL_HOURS", 24), 1, 72);
+    const ttlHours = 1;
     const expires_at = new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString();
 
     const shortId = randomString(6, "ABCDEFGHJKLMNPQRSTUVWXYZ23456789");

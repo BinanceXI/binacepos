@@ -1,11 +1,18 @@
 import { supabase } from "@/lib/supabase";
 import { ensureSupabaseSession } from "@/lib/supabaseSession";
+import {
+  getTenantScopeFromLocalUser,
+  readScopedJSON,
+  tenantScopeKey,
+  writeScopedJSON,
+} from "@/lib/tenantScope";
 
 export type ServiceBookingStatus = "booked" | "completed" | "cancelled";
 
 export type ServiceBooking = {
   id: string;
   service_id: string;
+  business_id?: string | null;
   service_name: string;
   customer_name: string | null;
   booking_date_time: string; // ISO
@@ -19,6 +26,7 @@ export type ServiceBooking = {
 export type LocalServiceBooking = ServiceBooking & {
   synced: boolean;
   lastError?: string;
+  scope_key?: string | null;
 };
 
 const DB_NAME = "binancexi_pos_bookings";
@@ -31,21 +39,35 @@ function isIdbAvailable() {
   return typeof indexedDB !== "undefined";
 }
 
-function safeJSONParse<T>(raw: string | null, fallback: T): T {
-  if (!raw) return fallback;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
+function currentScope() {
+  return getTenantScopeFromLocalUser();
+}
+
+function currentScopeKey() {
+  return tenantScopeKey(currentScope());
+}
+
+function bookingMatchesCurrentScope(booking: Partial<LocalServiceBooking>): boolean {
+  const scope = currentScope();
+  if (!scope) return true;
+
+  const expectedScopeKey = tenantScopeKey(scope);
+  const rowScopeKey = String((booking as any)?.scope_key || "").trim();
+  if (rowScopeKey) return rowScopeKey === expectedScopeKey;
+
+  const businessId = String((booking as any)?.business_id || "").trim();
+  return businessId ? businessId === scope.businessId : false;
 }
 
 function loadLsMap(): Record<string, LocalServiceBooking> {
-  return safeJSONParse<Record<string, LocalServiceBooking>>(localStorage.getItem(LS_FALLBACK_KEY), {});
+  return readScopedJSON<Record<string, LocalServiceBooking>>(LS_FALLBACK_KEY, {}, {
+    scope: currentScope(),
+    migrateLegacy: true,
+  });
 }
 
 function saveLsMap(map: Record<string, LocalServiceBooking>) {
-  localStorage.setItem(LS_FALLBACK_KEY, JSON.stringify(map));
+  writeScopedJSON(LS_FALLBACK_KEY, map, { scope: currentScope() });
 }
 
 function notifyQueueChanged() {
@@ -111,7 +133,7 @@ export function normalizeMoney(n: any) {
 }
 
 function toRemoteRow(b: LocalServiceBooking): ServiceBooking {
-  const { synced: _synced, lastError: _lastError, ...row } = b;
+  const { synced: _synced, lastError: _lastError, scope_key: _scopeKey, ...row } = b;
   return row;
 }
 
@@ -166,16 +188,18 @@ function toRemoteRowLegacy(b: LocalServiceBooking) {
 export async function listLocalServiceBookings(): Promise<LocalServiceBooking[]> {
   if (!isIdbAvailable()) {
     const map = loadLsMap();
-    return Object.values(map).sort((a, b) => a.booking_date_time.localeCompare(b.booking_date_time));
+    return Object.values(map)
+      .filter((row) => bookingMatchesCurrentScope(row))
+      .sort((a, b) => a.booking_date_time.localeCompare(b.booking_date_time));
   }
 
   try {
     return await withStore("readonly", async (store) => {
       if ("getAll" in store) {
         const res = await reqToPromise((store as any).getAll());
-        return (res as any[] as LocalServiceBooking[]).sort((a, b) =>
-          a.booking_date_time.localeCompare(b.booking_date_time)
-        );
+        return (res as any[] as LocalServiceBooking[])
+          .filter((row) => bookingMatchesCurrentScope(row))
+          .sort((a, b) => a.booking_date_time.localeCompare(b.booking_date_time));
       }
 
       const out: LocalServiceBooking[] = [];
@@ -189,11 +213,15 @@ export async function listLocalServiceBookings(): Promise<LocalServiceBooking[]>
           cursor.continue();
         };
       });
-      return out.sort((a, b) => a.booking_date_time.localeCompare(b.booking_date_time));
+      return out
+        .filter((row) => bookingMatchesCurrentScope(row))
+        .sort((a, b) => a.booking_date_time.localeCompare(b.booking_date_time));
     });
   } catch {
     const map = loadLsMap();
-    return Object.values(map).sort((a, b) => a.booking_date_time.localeCompare(b.booking_date_time));
+    return Object.values(map)
+      .filter((row) => bookingMatchesCurrentScope(row))
+      .sort((a, b) => a.booking_date_time.localeCompare(b.booking_date_time));
   }
 }
 
@@ -203,25 +231,34 @@ export async function getLocalServiceBooking(id: string): Promise<LocalServiceBo
 
   if (!isIdbAvailable()) {
     const map = loadLsMap();
-    return map[key] || null;
+    const row = map[key] || null;
+    return row && bookingMatchesCurrentScope(row) ? row : null;
   }
 
   try {
-    return await withStore("readonly", async (store) => {
+    const row = await withStore("readonly", async (store) => {
       const res = await reqToPromise(store.get(key));
       return (res as any) || null;
     });
+    return row && bookingMatchesCurrentScope(row) ? row : null;
   } catch {
     const map = loadLsMap();
-    return map[key] || null;
+    const row = map[key] || null;
+    return row && bookingMatchesCurrentScope(row) ? row : null;
   }
 }
 
 export async function upsertLocalServiceBooking(booking: LocalServiceBooking): Promise<void> {
   const key = String(booking?.id || "").trim();
   if (!key) throw new Error("Missing booking id");
+  const scope = currentScope();
 
-  const normalized: LocalServiceBooking = { ...booking, id: key };
+  const normalized: LocalServiceBooking = {
+    ...booking,
+    id: key,
+    business_id: booking.business_id ?? scope?.businessId ?? null,
+    scope_key: booking.scope_key || currentScopeKey(),
+  };
 
   if (!isIdbAvailable()) {
     const map = loadLsMap();
@@ -363,9 +400,10 @@ export async function pullRecentServiceBookings(daysBack = 30): Promise<{ pulled
   if (!sessionRes.ok) return { pulled: 0 };
 
   const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+  const scope = currentScope();
 
   const modernSelect =
-    "id, service_id, service_name, customer_name, booking_date_time, deposit_amount, total_price, status, created_at, updated_at";
+    "id, business_id, service_id, service_name, customer_name, booking_date_time, deposit_amount, total_price, status, created_at, updated_at";
   const legacySelect =
     "id, service_name, service_description, customer_name, booking_date_time, total_amount, deposit_paid, remaining_balance, status, created_at, updated_at";
 
@@ -407,6 +445,7 @@ export async function pullRecentServiceBookings(daysBack = 30): Promise<{ pulled
 
     const next: LocalServiceBooking = {
       id,
+      business_id: row.business_id ?? scope?.businessId ?? existing?.business_id ?? null,
       service_id:
         String(row.service_id || "").trim() ||
         parseLegacyServiceId(row.service_description) ||
@@ -425,6 +464,7 @@ export async function pullRecentServiceBookings(daysBack = 30): Promise<{ pulled
       created_at: String(row.created_at || new Date().toISOString()),
       updated_at: String(row.updated_at || row.created_at || new Date().toISOString()),
       synced: true,
+      scope_key: existing?.scope_key || currentScopeKey(),
     };
 
     if (!existing || existing.updated_at < next.updated_at) {

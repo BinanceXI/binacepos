@@ -8,7 +8,6 @@ This Edge Function provisions a **per-visitor demo tenant** (business + admin us
 - `DEMO_RATE_LIMIT_MAX` (default `3`)
 - `DEMO_RATE_LIMIT_MAX_TURNSTILE` (default `10`, only when Turnstile is enabled)
 - `DEMO_RATE_LIMIT_WINDOW_MINUTES` (default `60`)
-- `DEMO_TTL_HOURS` (default `24`)
 - Optional Turnstile hardening:
   - `TURNSTILE_SECRET_KEY` (if set, captcha is required)
 
@@ -19,4 +18,5 @@ Apply migrations:
 
 ## Notes
 - `verify_jwt=false` by design (public provisioning endpoint). Guard rails are origin allowlist + rate limiting.
-- Demo cleanup runs opportunistically when new demos are created.
+- Demo TTL is hard-coded to **1 hour**.
+- Demo cleanup runs opportunistically when new demos are created and via the scheduled `cleanup_demo_sessions` function.

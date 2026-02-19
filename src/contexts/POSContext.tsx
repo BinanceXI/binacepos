@@ -12,6 +12,7 @@ import React, {
 import type { CartItem, Product, SyncStatus, Sale, POSMode, Discount } from "@/types/pos";
 import { supabase } from "@/lib/supabase";
 import { ensureSupabaseSession } from "@/lib/supabaseSession";
+import { readScopedJSON, resolveTenantScope, tenantScopeKey, writeScopedJSON } from "@/lib/tenantScope";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { getExpenseQueueCount, syncExpenses } from "@/lib/expenses";
@@ -332,6 +333,7 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [customerName, setCustomerName] = useState("");
   const [activeDiscount, setActiveDiscount] = useState<Discount | null>(null);
+  const [heldSalesReadyScopeKey, setHeldSalesReadyScopeKey] = useState("");
 
   const syncingRef = useRef(false);
   const globalSyncingRef = useRef(false);
@@ -351,14 +353,59 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
     return !!currentUser.permissions?.[permission];
   };
 
+  const getStorageScope = useCallback(
+    () =>
+      resolveTenantScope(
+        currentUser
+          ? {
+              id: currentUser.id,
+              business_id: currentUser.business_id,
+            }
+          : null
+      ),
+    [currentUser?.id, currentUser?.business_id]
+  );
+
+  const readSalesQueue = useCallback(
+    () =>
+      readScopedJSON<OfflineSale[]>(OFFLINE_QUEUE_KEY, [], {
+        scope: getStorageScope(),
+        migrateLegacy: true,
+      }),
+    [getStorageScope]
+  );
+
+  const writeSalesQueueStorage = useCallback(
+    (queue: OfflineSale[]) => {
+      writeScopedJSON(OFFLINE_QUEUE_KEY, queue, { scope: getStorageScope() });
+    },
+    [getStorageScope]
+  );
+
+  const readHeldSalesStorage = useCallback(
+    () =>
+      readScopedJSON<Sale[]>(HELD_SALES_KEY, [], {
+        scope: getStorageScope(),
+        migrateLegacy: true,
+      }),
+    [getStorageScope]
+  );
+
+  const writeHeldSalesStorage = useCallback(
+    (sales: Sale[]) => {
+      writeScopedJSON(HELD_SALES_KEY, sales, { scope: getStorageScope() });
+    },
+    [getStorageScope]
+  );
+
   const getSalesQueueCount = useCallback(() => {
     try {
-      const queue = safeJSONParse<OfflineSale[]>(localStorage.getItem(OFFLINE_QUEUE_KEY), []);
+      const queue = readSalesQueue();
       return queue.length;
     } catch {
       return 0;
     }
-  }, []);
+  }, [readSalesQueue]);
 
   const refreshPendingSyncCount = useCallback(async () => {
     const sales = getSalesQueueCount();
@@ -379,19 +426,24 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
   /* ---------------------- LOAD HELD SALES & QUEUE --------------------------- */
 
   useEffect(() => {
-    const savedHeld = safeJSONParse<Sale[]>(localStorage.getItem(HELD_SALES_KEY), []);
+    const scopeKey = tenantScopeKey(getStorageScope()) || "global";
+    setHeldSalesReadyScopeKey("");
+    const savedHeld = readHeldSalesStorage();
     setHeldSales(
       savedHeld.map((s: any) => ({
         ...s,
         items: ensureLineIds(s.items || []),
       }))
     );
+    setHeldSalesReadyScopeKey(scopeKey);
     void refreshPendingSyncCount();
-  }, []);
+  }, [getStorageScope, readHeldSalesStorage, refreshPendingSyncCount]);
 
   useEffect(() => {
-    localStorage.setItem(HELD_SALES_KEY, JSON.stringify(heldSales));
-  }, [heldSales]);
+    const scopeKey = tenantScopeKey(getStorageScope()) || "global";
+    if (heldSalesReadyScopeKey !== scopeKey) return;
+    writeHeldSalesStorage(heldSales);
+  }, [getStorageScope, heldSales, heldSalesReadyScopeKey, writeHeldSalesStorage]);
 
   const notifyQueueChanged = () => {
     try {
@@ -402,15 +454,15 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const saveToOfflineQueue = (sale: OfflineSale) => {
-    const queue = safeJSONParse<OfflineSale[]>(localStorage.getItem(OFFLINE_QUEUE_KEY), []);
+    const queue = readSalesQueue();
     queue.push(sale);
-    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+    writeSalesQueueStorage(queue);
     notifyQueueChanged();
     void refreshPendingSyncCount();
   };
 
   const writeQueue = (queue: OfflineSale[]) => {
-    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+    writeSalesQueueStorage(queue);
     notifyQueueChanged();
     void refreshPendingSyncCount();
   };
@@ -419,7 +471,7 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
     const message = String(msg || "").trim();
     if (!message) return;
 
-    const queue = safeJSONParse<OfflineSale[]>(localStorage.getItem(OFFLINE_QUEUE_KEY), []);
+    const queue = readSalesQueue();
     if (!queue.length) return;
 
     let changed = false;
@@ -451,7 +503,7 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
     if (syncingRef.current) return { failed: 0, stockErrors: 0 };
     if (!navigator.onLine) return { failed: 0, stockErrors: 0 };
 
-    const queue = safeJSONParse<OfflineSale[]>(localStorage.getItem(OFFLINE_QUEUE_KEY), []);
+    const queue = readSalesQueue();
 
     if (!queue.length) {
       void refreshPendingSyncCount();

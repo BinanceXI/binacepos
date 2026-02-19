@@ -21,8 +21,10 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar 
 } from 'recharts';
 import { cn } from '@/lib/utils';
+import { usePOS } from '@/contexts/POSContext';
 import { listExpenses } from '@/lib/expenses';
 import { listLocalServiceBookings, type LocalServiceBooking } from '@/lib/serviceBookings';
+import { readScopedJSON, resolveTenantScope, tenantScopeKey, writeScopedJSON } from '@/lib/tenantScope';
 
 const OFFLINE_QUEUE_KEY = 'binancexi_offline_queue';
 const ORDERS_CACHE_KEY = 'binancexi_orders_cache_v1';
@@ -46,25 +48,19 @@ type OrderRow = {
   order_items?: OrderItemRow[] | null;
 };
 
-function safeJSONParse<T>(raw: string | null, fallback: T): T {
-  if (!raw) return fallback;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
+function readOrdersCache(scope: ReturnType<typeof resolveTenantScope>): OrderRow[] {
+  return readScopedJSON<OrderRow[]>(ORDERS_CACHE_KEY, [], {
+    scope,
+    migrateLegacy: true,
+  });
 }
 
-function readOrdersCache(): OrderRow[] {
-  return safeJSONParse<OrderRow[]>(localStorage.getItem(ORDERS_CACHE_KEY), []);
+function writeOrdersCache(scope: ReturnType<typeof resolveTenantScope>, rows: OrderRow[]) {
+  writeScopedJSON(ORDERS_CACHE_KEY, rows, { scope });
 }
 
-function writeOrdersCache(rows: OrderRow[]) {
-  localStorage.setItem(ORDERS_CACHE_KEY, JSON.stringify(rows));
-}
-
-function upsertOrdersCache(rows: OrderRow[]) {
-  const cur = readOrdersCache();
+function upsertOrdersCache(scope: ReturnType<typeof resolveTenantScope>, rows: OrderRow[]) {
+  const cur = readOrdersCache(scope);
   const byId = new Map<string, OrderRow>();
   for (const o of cur) {
     if (o?.id) byId.set(String(o.id), o);
@@ -75,11 +71,14 @@ function upsertOrdersCache(rows: OrderRow[]) {
 
   const merged = Array.from(byId.values()).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
   const pruned = merged.slice(0, 3000);
-  writeOrdersCache(pruned);
+  writeOrdersCache(scope, pruned);
 }
 
-function offlineQueueToOrders(): OrderRow[] {
-  const queue = safeJSONParse<any[]>(localStorage.getItem(OFFLINE_QUEUE_KEY), []);
+function offlineQueueToOrders(scope: ReturnType<typeof resolveTenantScope>): OrderRow[] {
+  const queue = readScopedJSON<any[]>(OFFLINE_QUEUE_KEY, [], {
+    scope,
+    migrateLegacy: true,
+  });
   return (queue || [])
     .map((sale: any) => {
       const created_at = String(sale?.meta?.timestamp || new Date().toISOString());
@@ -224,6 +223,21 @@ async function fetchOrdersRemote(startISO: string, endISO: string): Promise<Orde
 }
 
 export const ReportsPage = () => {
+  const { currentUser } = usePOS();
+  const scope = useMemo(
+    () =>
+      resolveTenantScope(
+        currentUser
+          ? {
+              id: currentUser.id,
+              business_id: currentUser.business_id,
+            }
+          : null
+      ),
+    [currentUser?.id, currentUser?.business_id]
+  );
+  const scopeKey = useMemo(() => tenantScopeKey(scope) || "global", [scope?.businessId, scope?.userId]);
+
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [rangeType, setRangeType] = useState<'today' | 'week' | 'month' | 'year' | 'custom'>('today');
   const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined }>({
@@ -252,13 +266,13 @@ export const ReportsPage = () => {
   }, []);
 
   const { data: monthOrders = [] } = useQuery({
-    queryKey: ['p5MonthOrders', monthRange.from, monthRange.to, isOnline],
+    queryKey: ['p5MonthOrders', scopeKey, monthRange.from, monthRange.to, isOnline],
     queryFn: async () => {
       const start = parseISO(monthRange.from);
       const end = parseISO(monthRange.to);
 
-      const queued = offlineQueueToOrders().filter((o) => inRange(o.created_at, start, end));
-      const cached = readOrdersCache().filter((o) => inRange(o.created_at, start, end));
+      const queued = offlineQueueToOrders(scope).filter((o) => inRange(o.created_at, start, end));
+      const cached = readOrdersCache(scope).filter((o) => inRange(o.created_at, start, end));
 
       if (!isOnline) {
         return [...cached, ...queued].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
@@ -266,7 +280,7 @@ export const ReportsPage = () => {
 
       try {
         const remote = await fetchOrdersRemote(monthRange.from, monthRange.to);
-        upsertOrdersCache(remote);
+        upsertOrdersCache(scope, remote);
         return [...remote, ...queued];
       } catch (e) {
         console.warn('[reports] month fetch failed, using cache fallback:', e);
@@ -353,7 +367,7 @@ export const ReportsPage = () => {
 
   // --- 1. FETCH REAL DATA ---
   const { data: salesData = [], isLoading } = useQuery({
-    queryKey: ['salesReport', rangeType, dateRange, isOnline],
+    queryKey: ['salesReport', scopeKey, rangeType, dateRange, isOnline],
     queryFn: async () => {
       const now = new Date();
       let start = startOfDay(now);
@@ -367,8 +381,8 @@ export const ReportsPage = () => {
         end = endOfDay(dateRange.to || dateRange.from);
       }
 
-      const queued = offlineQueueToOrders().filter((o) => inRange(o.created_at, start, end));
-      const cached = readOrdersCache().filter((o) => inRange(o.created_at, start, end));
+      const queued = offlineQueueToOrders(scope).filter((o) => inRange(o.created_at, start, end));
+      const cached = readOrdersCache(scope).filter((o) => inRange(o.created_at, start, end));
 
       // Offline-first: render from cached + queued sales
       if (!isOnline) {
@@ -377,7 +391,7 @@ export const ReportsPage = () => {
 
       try {
         const remote = await fetchOrdersRemote(start.toISOString(), end.toISOString());
-        upsertOrdersCache(remote);
+        upsertOrdersCache(scope, remote);
         return [...remote, ...queued];
       } catch (e) {
         console.warn('[reports] sales fetch failed, using cache fallback:', e);

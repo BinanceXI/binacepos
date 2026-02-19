@@ -1,0 +1,33 @@
+name: Demo Session Cleanup
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger cleanup_demo_sessions
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          DEMO_CLEANUP_SECRET: ${{ secrets.DEMO_CLEANUP_SECRET }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$DEMO_CLEANUP_SECRET" ]; then
+            echo "Missing SUPABASE_URL or DEMO_CLEANUP_SECRET secret"
+            exit 1
+          fi
+
+          HTTP_STATUS=$(curl -sS -o /tmp/demo_cleanup_response.json -w "%{http_code}" -X POST \
+            "$SUPABASE_URL/functions/v1/cleanup_demo_sessions" \
+            -H "Content-Type: application/json" \
+            -H "x-demo-cleanup-secret: $DEMO_CLEANUP_SECRET" \
+            --data '{}')
+
+          cat /tmp/demo_cleanup_response.json
+
+          if [ "$HTTP_STATUS" -ge 400 ]; then
+            echo "cleanup_demo_sessions failed with HTTP $HTTP_STATUS"
+            exit 1
+          fi

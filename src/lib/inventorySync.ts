@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { ensureSupabaseSession } from "@/lib/supabaseSession";
+import { getTenantScopeFromLocalUser, readScopedJSON, writeScopedJSON } from "@/lib/tenantScope";
 
 export const PRODUCTS_QUEUE_KEY = "binancexi_products_mutation_queue_v2";
 
@@ -28,15 +29,6 @@ export type InventoryOfflineMutation =
   | { kind: "archive_product"; id: string; ts: number }
   | { kind: "set_stock"; id: string; stock_quantity: number; ts: number };
 
-function safeParse<T>(raw: string | null, fallback: T): T {
-  if (!raw) return fallback;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
 function notifyQueueChanged() {
   try {
     window.dispatchEvent(new Event("binancexi:queue_changed"));
@@ -45,19 +37,30 @@ function notifyQueueChanged() {
   }
 }
 
+function readScopedQueue(): InventoryOfflineMutation[] {
+  return readScopedJSON<InventoryOfflineMutation[]>(PRODUCTS_QUEUE_KEY, [], {
+    scope: getTenantScopeFromLocalUser(),
+    migrateLegacy: true,
+  });
+}
+
+function writeScopedQueue(next: InventoryOfflineMutation[]) {
+  writeScopedJSON(PRODUCTS_QUEUE_KEY, next, { scope: getTenantScopeFromLocalUser() });
+}
+
 export function enqueueInventoryMutation(m: InventoryOfflineMutation) {
-  const q = safeParse<InventoryOfflineMutation[]>(localStorage.getItem(PRODUCTS_QUEUE_KEY), []);
+  const q = readScopedQueue();
   q.push(m);
-  localStorage.setItem(PRODUCTS_QUEUE_KEY, JSON.stringify(q));
+  writeScopedQueue(q);
   notifyQueueChanged();
 }
 
 export function readInventoryQueue(): InventoryOfflineMutation[] {
-  return safeParse<InventoryOfflineMutation[]>(localStorage.getItem(PRODUCTS_QUEUE_KEY), []);
+  return readScopedQueue();
 }
 
 function writeInventoryQueue(next: InventoryOfflineMutation[]) {
-  localStorage.setItem(PRODUCTS_QUEUE_KEY, JSON.stringify(next));
+  writeScopedQueue(next);
   notifyQueueChanged();
 }
 

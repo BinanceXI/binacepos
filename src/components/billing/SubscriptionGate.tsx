@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { usePOS } from "@/contexts/POSContext";
 import { BRAND } from "@/lib/brand";
 import { secureTime } from "@/lib/secureTime";
+import { clearClientIndexedDb, clearClientStorage } from "@/lib/sessionCleanup";
 import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ type BillingCache = {
 };
 
 const BILLING_CACHE_PREFIX = "binancexi_billing_cache_v1:";
+const DEMO_EXPIRES_KEY = "binancexi_demo_expires_at";
 
 function getBillingCacheKey(businessId: string) {
   return `${BILLING_CACHE_PREFIX}${businessId}`;
@@ -78,7 +80,7 @@ function computeState(b: BillingRow | null, businessStatus: string | null, nowMs
 
 export function SubscriptionGate({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient();
-  const { currentUser } = usePOS();
+  const { currentUser, setCurrentUser } = usePOS();
 
   const role = (currentUser as any)?.role;
   const businessId = String((currentUser as any)?.business_id || "").trim() || null;
@@ -87,6 +89,7 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
   const [code, setCode] = useState("");
   const [redeeming, setRedeeming] = useState(false);
   const [clockTick, setClockTick] = useState(0);
+  const [forcingDemoExpiry, setForcingDemoExpiry] = useState(false);
 
   // Enforce lock as time passes even if the page stays open (especially offline).
   useEffect(() => {
@@ -143,10 +146,79 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
   // eslint-disable-next-line @typescript-eslint/no-unused-expressions
   clockTick;
   const nowMs = secureTime.timestamp();
+  let demoExpiresAtRaw: string | null = null;
+  if (typeof window !== "undefined") {
+    try {
+      demoExpiresAtRaw = localStorage.getItem(DEMO_EXPIRES_KEY);
+    } catch {
+      demoExpiresAtRaw = null;
+    }
+  }
+  const demoExpiresAtMs = demoExpiresAtRaw ? Date.parse(demoExpiresAtRaw) : NaN;
+  const demoExpired = Number.isFinite(demoExpiresAtMs) ? nowMs >= demoExpiresAtMs : false;
   const state: AccessState = computeState(data?.billing ?? null, data?.businessStatus ?? null, nowMs);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    if (role === "platform_admin") return;
+    if (!demoExpired) return;
+    if (forcingDemoExpiry) return;
+
+    let cancelled = false;
+    setForcingDemoExpiry(true);
+
+    const run = async () => {
+      toast.error("Demo expired. Start a new demo session.");
+
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // ignore
+      }
+
+      clearClientStorage({ includeDemoExpires: true });
+      await clearClientIndexedDb();
+
+      if (cancelled) return;
+
+      setCurrentUser(null);
+      qc.clear();
+      window.location.assign("/?demo=1");
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.id, role, demoExpired, forcingDemoExpiry, qc, setCurrentUser]);
 
   // Platform admin is never subscription-gated.
   if (role === "platform_admin") return <>{children}</>;
+
+  if (demoExpired || forcingDemoExpiry) {
+    return (
+      <div className="min-h-[70vh] flex items-center justify-center p-6">
+        <Card className="max-w-lg w-full shadow-card">
+          <CardHeader>
+            <CardTitle>Demo Expired</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="text-sm text-muted-foreground">
+              Demo expired. Start a new demo session.
+            </div>
+            <Button
+              className="w-full"
+              onClick={() => window.location.assign("/?demo=1")}
+              disabled={forcingDemoExpiry}
+            >
+              {forcingDemoExpiry ? "Signing out..." : "Start New Demo"}
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (!businessId) {
     return (

@@ -1,4 +1,10 @@
 import { supabase } from "@/lib/supabase";
+import {
+  getTenantScopeFromLocalUser,
+  readScopedJSON,
+  tenantScopeKey,
+  writeScopedJSON,
+} from "@/lib/tenantScope";
 
 export type ExpenseType = "expense" | "owner_drawing";
 
@@ -24,8 +30,8 @@ export type ExpenseRange = {
 
 // Offline sync uses an "expense_queue" where each expense id is either queued for upsert or queued for delete.
 type ExpenseQueueItem =
-  | { id: string; op: "upsert"; expense: Expense; ts: number; lastError?: string }
-  | { id: string; op: "delete"; ts: number; lastError?: string };
+  | { id: string; op: "upsert"; expense: Expense; ts: number; lastError?: string; scope_key?: string | null }
+  | { id: string; op: "delete"; ts: number; lastError?: string; scope_key?: string | null };
 
 const DB_NAME = "binancexi_pos_expenses";
 const DB_VERSION = 1;
@@ -34,61 +40,72 @@ const QUEUE_STORE = "expense_queue";
 
 const LS_EXPENSES_KEY = "binancexi_expenses_v1";
 const LS_QUEUE_KEY = "binancexi_expenses_queue_v1";
-const LS_QUEUE_COUNT_KEY = "binancexi_expenses_queue_count_v1";
 
 function isIdbAvailable() {
   return typeof indexedDB !== "undefined";
 }
 
-function safeJSONParse<T>(raw: string | null, fallback: T): T {
-  if (!raw) return fallback;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
+function currentScope() {
+  return getTenantScopeFromLocalUser();
+}
+
+function currentScopeKey() {
+  return tenantScopeKey(currentScope());
+}
+
+function expenseMatchesCurrentScope(expense: Partial<Expense & { scope_key?: string | null }>): boolean {
+  const scope = currentScope();
+  if (!scope) return true;
+
+  const expectedScopeKey = tenantScopeKey(scope);
+  const rowScopeKey = String((expense as any)?.scope_key || "").trim();
+  if (rowScopeKey) return rowScopeKey === expectedScopeKey;
+
+  const businessId = String(expense?.business_id || "").trim();
+  return businessId ? businessId === scope.businessId : false;
+}
+
+function queueItemMatchesCurrentScope(item: ExpenseQueueItem): boolean {
+  const scope = currentScope();
+  if (!scope) return true;
+
+  const expectedScopeKey = tenantScopeKey(scope);
+  const itemScopeKey = String((item as any)?.scope_key || "").trim();
+  if (itemScopeKey) return itemScopeKey === expectedScopeKey;
+
+  if (item.op === "upsert") {
+    return expenseMatchesCurrentScope(item.expense as any);
   }
+
+  // Legacy unscoped delete items cannot be safely attributed; ignore for isolation.
+  return false;
 }
 
 function loadLsExpensesMap(): Record<string, Expense> {
-  return safeJSONParse<Record<string, Expense>>(localStorage.getItem(LS_EXPENSES_KEY), {});
+  return readScopedJSON<Record<string, Expense>>(LS_EXPENSES_KEY, {}, {
+    scope: currentScope(),
+    migrateLegacy: true,
+  });
 }
 
 function saveLsExpensesMap(map: Record<string, Expense>) {
-  localStorage.setItem(LS_EXPENSES_KEY, JSON.stringify(map));
+  writeScopedJSON(LS_EXPENSES_KEY, map, { scope: currentScope() });
 }
 
 function loadLsQueueMap(): Record<string, ExpenseQueueItem> {
-  return safeJSONParse<Record<string, ExpenseQueueItem>>(localStorage.getItem(LS_QUEUE_KEY), {});
+  return readScopedJSON<Record<string, ExpenseQueueItem>>(LS_QUEUE_KEY, {}, {
+    scope: currentScope(),
+    migrateLegacy: true,
+  });
 }
 
 function saveLsQueueMap(map: Record<string, ExpenseQueueItem>) {
-  localStorage.setItem(LS_QUEUE_KEY, JSON.stringify(map));
-  setQueueCount(Object.keys(map).length);
+  writeScopedJSON(LS_QUEUE_KEY, map, { scope: currentScope() });
 }
 
 function notifyQueueChanged() {
   try {
     window.dispatchEvent(new Event("binancexi:queue_changed"));
-  } catch {
-    // ignore
-  }
-}
-
-let queueCount = (() => {
-  const raw = localStorage.getItem(LS_QUEUE_COUNT_KEY);
-  const n = raw == null ? NaN : Number(raw);
-  if (Number.isFinite(n)) return Math.max(0, Math.floor(n));
-  try {
-    return Object.keys(loadLsQueueMap()).length;
-  } catch {
-    return 0;
-  }
-})();
-
-function setQueueCount(n: number) {
-  queueCount = Math.max(0, Math.floor(n));
-  try {
-    localStorage.setItem(LS_QUEUE_COUNT_KEY, String(queueCount));
   } catch {
     // ignore
   }
@@ -149,13 +166,14 @@ function normalizeMoney(n: any) {
 
 function normalizeExpense(raw: Expense): Expense {
   const now = new Date().toISOString();
+  const scope = currentScope();
   const expenseTypeRaw = (raw.expense_type || "expense") as any;
   const expenseType: ExpenseType =
   expenseTypeRaw === "owner_draw" ? "owner_drawing" : (expenseTypeRaw as ExpenseType);
   return {
     id: String(raw.id || "").trim(),
     created_at: raw.created_at || now,
-    business_id: raw.business_id ?? null,
+    business_id: raw.business_id ?? scope?.businessId ?? null,
     created_by: raw.created_by ?? null,
     source: (raw.source || "pos").trim() || "pos",
     occurred_at: raw.occurred_at || now,
@@ -185,6 +203,7 @@ function isWithinRange(iso: string, range?: ExpenseRange) {
 
 async function upsertExpenseLocal(expense: Expense): Promise<void> {
   const normalized = normalizeExpense(expense);
+  const scopeKey = currentScopeKey();
   if (!normalized.id) throw new Error("Missing expense id");
   if (!normalized.category) throw new Error("Missing category");
   if (normalized.amount <= 0) throw new Error("Amount must be greater than 0");
@@ -196,7 +215,7 @@ async function upsertExpenseLocal(expense: Expense): Promise<void> {
   if (!isIdbAvailable()) return;
   try {
     await withStores("readwrite", ({ expenses }) => {
-      expenses.put(normalized as any);
+      expenses.put({ ...(normalized as any), scope_key: scopeKey } as any);
     });
   } catch {
     // localStorage fallback already saved
@@ -231,10 +250,12 @@ async function getExpenseLocal(id: string): Promise<Expense | null> {
   }
 
   try {
-    return await withStores("readonly", async ({ expenses }) => {
+    const row = await withStores("readonly", async ({ expenses }) => {
       const res = await reqToPromise(expenses.get(key));
       return (res as any) || null;
     });
+    if (!row) return null;
+    return expenseMatchesCurrentScope(row as any) ? (row as Expense) : null;
   } catch {
     const map = loadLsExpensesMap();
     return map[key] || null;
@@ -244,14 +265,14 @@ async function getExpenseLocal(id: string): Promise<Expense | null> {
 async function listExpensesLocal(): Promise<Expense[]> {
   if (!isIdbAvailable()) {
     const map = loadLsExpensesMap();
-    return Object.values(map);
+    return Object.values(map).filter((row) => expenseMatchesCurrentScope(row as any));
   }
 
   try {
     return await withStores("readonly", async ({ expenses }) => {
       if ("getAll" in expenses) {
         const res = await reqToPromise((expenses as any).getAll());
-        return (res as any[]) as Expense[];
+        return (res as any[]).filter((row) => expenseMatchesCurrentScope(row as any)) as Expense[];
       }
 
       const out: Expense[] = [];
@@ -265,20 +286,21 @@ async function listExpensesLocal(): Promise<Expense[]> {
           cursor.continue();
         };
       });
-      return out;
+      return out.filter((row) => expenseMatchesCurrentScope(row as any));
     });
   } catch {
     const map = loadLsExpensesMap();
-    return Object.values(map);
+    return Object.values(map).filter((row) => expenseMatchesCurrentScope(row as any));
   }
 }
 
 async function upsertQueueLocal(item: ExpenseQueueItem): Promise<void> {
   const key = String(item?.id || "").trim();
   if (!key) return;
+  const scopeKey = currentScopeKey();
 
   const map = loadLsQueueMap();
-  map[key] = { ...item, id: key };
+  map[key] = { ...item, id: key, scope_key: scopeKey };
   saveLsQueueMap(map);
   notifyQueueChanged();
 
@@ -312,13 +334,15 @@ async function deleteQueueLocal(id: string): Promise<void> {
 }
 
 async function listQueueLocal(): Promise<ExpenseQueueItem[]> {
-  if (!isIdbAvailable()) return Object.values(loadLsQueueMap());
+  if (!isIdbAvailable()) {
+    return Object.values(loadLsQueueMap()).filter((item) => queueItemMatchesCurrentScope(item));
+  }
 
   try {
     return await withStores("readonly", async ({ queue }) => {
       if ("getAll" in queue) {
         const res = await reqToPromise((queue as any).getAll());
-        return (res as any[]) as ExpenseQueueItem[];
+        return (res as any[]).filter((item) => queueItemMatchesCurrentScope(item as any)) as ExpenseQueueItem[];
       }
 
       const out: ExpenseQueueItem[] = [];
@@ -332,10 +356,10 @@ async function listQueueLocal(): Promise<ExpenseQueueItem[]> {
           cursor.continue();
         };
       });
-      return out;
+      return out.filter((item) => queueItemMatchesCurrentScope(item as any));
     });
   } catch {
-    return Object.values(loadLsQueueMap());
+    return Object.values(loadLsQueueMap()).filter((item) => queueItemMatchesCurrentScope(item));
   }
 }
 
@@ -395,7 +419,11 @@ export async function deleteExpense(id: string): Promise<void> {
 }
 
 export function getExpenseQueueCount(): number {
-  return queueCount;
+  try {
+    return Object.keys(loadLsQueueMap()).length;
+  } catch {
+    return 0;
+  }
 }
 
 export async function syncExpenses(): Promise<void> {

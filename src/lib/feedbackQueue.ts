@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { getTenantScopeFromLocalUser, readScopedJSON, writeScopedJSON } from "@/lib/tenantScope";
 
 export type FeedbackType = "bug" | "feature" | "review";
 export type FeedbackSeverity = "low" | "medium" | "high";
@@ -23,19 +24,13 @@ export type QueuedFeedback = {
 
 const QUEUE_KEY = "binancexi_feedback_queue_v1";
 
-function safeJSONParse<T>(raw: string | null): T | null {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
 function safeGetQueue(): QueuedFeedback[] {
   if (typeof window === "undefined") return [];
   try {
-    const parsed = safeJSONParse<QueuedFeedback[]>(localStorage.getItem(QUEUE_KEY));
+    const parsed = readScopedJSON<QueuedFeedback[]>(QUEUE_KEY, [], {
+      scope: getTenantScopeFromLocalUser(),
+      migrateLegacy: true,
+    });
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -45,7 +40,7 @@ function safeGetQueue(): QueuedFeedback[] {
 function safeSetQueue(next: QueuedFeedback[]) {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(QUEUE_KEY, JSON.stringify(next));
+    writeScopedJSON(QUEUE_KEY, next, { scope: getTenantScopeFromLocalUser() });
   } catch {
     // ignore
   }

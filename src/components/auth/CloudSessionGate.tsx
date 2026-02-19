@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { usePOS } from "@/contexts/POSContext";
+import { clearClientIndexedDb, clearClientStorage } from "@/lib/sessionCleanup";
 
 type CloudSessionState =
   | { status: "loading" }
@@ -17,17 +18,8 @@ async function hardLogout(setCurrentUser: (u: any) => void) {
   }
 
   // Clear local user + any persisted Supabase tokens (offline-first).
-  try {
-    localStorage.removeItem("binancexi_user");
-    localStorage.removeItem("platform_admin_session_backup_v1");
-    localStorage.removeItem("platform_admin_impersonation_v1");
-    localStorage.removeItem("REACT_QUERY_OFFLINE_CACHE");
-    Object.keys(localStorage).forEach((k) => {
-      if (k.startsWith("sb-") && k.endsWith("-auth-token")) localStorage.removeItem(k);
-    });
-  } catch {
-    // ignore
-  }
+  clearClientStorage();
+  await clearClientIndexedDb();
 
   setCurrentUser(null);
   window.location.assign("/");

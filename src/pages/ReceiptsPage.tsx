@@ -31,6 +31,7 @@ import { buildVerifyUrl, getConfiguredPublicAppUrl, normalizeBaseUrl } from "@/l
 import { PrintableReceipt } from "@/components/pos/PrintableReceipt";
 import type { CartItem, Product, Discount } from "@/types/pos";
 import { Capacitor } from "@capacitor/core";
+import { getTenantScopeFromLocalUser, readScopedJSON, writeScopedJSON } from "@/lib/tenantScope";
 // 🔥 THERMAL PRINTER
 import {
   PRINTER_MODE_KEY,
@@ -56,7 +57,9 @@ function safeJSONParse<T>(raw: string | null, fallback: T): T {
 }
 
 function writeOfflineQueue(queue: any[]) {
-  localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue || []));
+  writeScopedJSON(OFFLINE_QUEUE_KEY, queue || [], {
+    scope: getTenantScopeFromLocalUser(),
+  });
   try {
     window.dispatchEvent(new Event("binancexi:queue_changed"));
   } catch {
@@ -388,7 +391,10 @@ const testThermalPrint = async () => {
   // 4) Offline pending receipts
   // --------------------
   const readOfflineQueue = useCallback(() => {
-    const queue = safeJSONParse<any[]>(localStorage.getItem(OFFLINE_QUEUE_KEY), []);
+    const queue = readScopedJSON<any[]>(OFFLINE_QUEUE_KEY, [], {
+      scope: getTenantScopeFromLocalUser(),
+      migrateLegacy: true,
+    });
     return (queue || []).slice().reverse();
   }, []);
 
@@ -577,7 +583,10 @@ const testThermalPrint = async () => {
 
   const removeOfflinePending = useCallback(
     (receiptId: string) => {
-      const queue = safeJSONParse<any[]>(localStorage.getItem(OFFLINE_QUEUE_KEY), []);
+      const queue = readScopedJSON<any[]>(OFFLINE_QUEUE_KEY, [], {
+        scope: getTenantScopeFromLocalUser(),
+        migrateLegacy: true,
+      });
       const next = (queue || []).filter((s: any) => s?.meta?.receiptId !== receiptId);
       writeOfflineQueue(next);
       toast.success("Removed from offline queue");

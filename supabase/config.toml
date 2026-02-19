@@ -58,3 +58,9 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/create_demo_session/deno.json"
 entrypoint = "./functions/create_demo_session/index.ts"
+
+[functions.cleanup_demo_sessions]
+enabled = true
+verify_jwt = false
+import_map = "./functions/cleanup_demo_sessions/deno.json"
+entrypoint = "./functions/cleanup_demo_sessions/index.ts"
