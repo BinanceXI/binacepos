@@ -1,14 +1,23 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 
 buildscript {
+    configurations.classpath {
+        resolutionStrategy {
+            force(
+                'org.bouncycastle:bcprov-jdk18on:1.78.1',
+                'org.bouncycastle:bcpkix-jdk18on:1.78.1',
+                'org.bouncycastle:bcutil-jdk18on:1.78.1'
+            )
+        }
+    }
     
     repositories {
         google()
         mavenCentral()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:9.0.0'
-        classpath 'com.google.gms:google-services:4.4.4'
+        classpath 'com.android.tools.build:gradle:8.9.1'
+        classpath 'com.google.gms:google-services:4.4.1'
 
         // NOTE: Do not place your application dependencies here; they belong
         // in the individual module build.gradle files
@@ -21,6 +30,30 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+    }
+    configurations.all {
+        resolutionStrategy {
+            force(
+                'org.bouncycastle:bcprov-jdk18on:1.78.1',
+                'org.bouncycastle:bcpkix-jdk18on:1.78.1',
+                'org.bouncycastle:bcutil-jdk18on:1.78.1'
+            )
+        }
+    }
+}
+
+subprojects {
+    buildscript {
+        configurations.matching { it.name == "classpath" }.all {
+            resolutionStrategy {
+                // Some Capacitor plugins declare their own AGP buildscript (e.g. 8.13.0) and pull incompatible transitive deps.
+                force(
+                    'org.bouncycastle:bcprov-jdk18on:1.78.1',
+                    'org.bouncycastle:bcpkix-jdk18on:1.78.1',
+                    'org.bouncycastle:bcutil-jdk18on:1.78.1'
+                )
+            }
+        }
     }
 }
 
