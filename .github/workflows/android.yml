@@ -5,8 +5,6 @@ on:
   push:
     branches: ["main"]
     tags: ["v*"]
-  pull_request:
-    branches: ["main"]
 
 jobs:
   build-android:
@@ -45,6 +43,7 @@ jobs:
 
       - name: Setup Java 21
         uses: actions/setup-java@v4
+        id: setup_java
         with:
           distribution: temurin
           java-version: 21
@@ -96,9 +95,32 @@ jobs:
             "s/getDefaultProguardFile(\"proguard-android.txt\")/getDefaultProguardFile(\"proguard-android-optimize.txt\")/g"
 
       # ✅ Build DEBUG (easy install)
+      - name: Verify Java and Gradle versions for debug
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          echo "Java version:"
+          java -version
+          echo "JAVA_HOME: $JAVA_HOME"
+          echo "JAVA_HOME from setup-java step: ${{ steps.setup_java.outputs.path }}"
+          echo "Gradle wrapper:"
+          grep '^distributionUrl=' gradle/wrapper/gradle-wrapper.properties
+          echo "Gradle version:"
+          ./gradlew --no-daemon -Dorg.gradle.java.home="$JAVA_HOME" -version
+
       - name: Build Android DEBUG APK
         working-directory: android
-        run: ./gradlew clean assembleDebug
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          echo "JAVA_HOME for Gradle: $JAVA_HOME"
+          "${JAVA_HOME}/bin/java" -version
+          ./gradlew --no-daemon --stacktrace \
+            -Dorg.gradle.java.home="$JAVA_HOME" \
+            clean assembleDebug
 
       - name: Upload DEBUG APK artifact
         uses: actions/upload-artifact@v4
@@ -109,7 +131,13 @@ jobs:
       - name: Build Android RELEASE bundle (unsigned AAB)
         if: startsWith(github.ref, 'refs/tags/v')
         working-directory: android
-        run: ./gradlew bundleRelease
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace \
+            -Dorg.gradle.java.home="$JAVA_HOME" \
+            bundleRelease
 
       - name: Upload RELEASE AAB artifact
         if: startsWith(github.ref, 'refs/tags/v')
