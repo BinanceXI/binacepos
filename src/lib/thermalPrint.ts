@@ -2,6 +2,7 @@ import { Capacitor } from "@capacitor/core";
 import type { ThermalJob } from "@/lib/printQueue";
 import { getThermalQueue, removeThermalJob } from "@/lib/printQueue";
 import { printToBluetooth58mm } from "@/lib/androidBluetoothPrint";
+import { buildReceiptPrintModel, type ReceiptStoreSettings } from "@/core/receipts/receiptPrintModel";
 
 // settings keys (used by your Settings UI)
 export const PRINTER_MODE_KEY = "binancexi_printer_mode"; // "browser" | "tcp" | "bt"
@@ -75,6 +76,7 @@ function esc(s: string) {
 }
 
 export type ThermalReceiptData = {
+  receiptId?: string;
   receiptNumber: string;
   timestamp: string;
   cashierName: string;
@@ -85,22 +87,55 @@ export type ThermalReceiptData = {
   discount: number;
   tax: number;
   total: number;
+  activeDiscountName?: string | null;
+  taxRatePct?: number | null;
+  settings?: ReceiptStoreSettings | null;
 };
 
+function buildCanonicalReceiptModel(d: ThermalReceiptData) {
+  return buildReceiptPrintModel({
+    cart: (d.cart || []) as any,
+    cashierName: d.cashierName || "Staff",
+    customerName: d.customerName || "",
+    receiptId: d.receiptId || d.receiptNumber,
+    receiptNumber: d.receiptNumber,
+    paymentMethod: d.paymentMethod || "cash",
+    subtotal: Number(d.subtotal || 0),
+    discount: Number(d.discount || 0),
+    tax: Number(d.tax || 0),
+    total: Number(d.total || 0),
+    activeDiscount: d.activeDiscountName ? ({ name: d.activeDiscountName } as any) : null,
+    taxRatePct: d.taxRatePct ?? null,
+    timestamp: d.timestamp || new Date().toISOString(),
+    settings: d.settings || {},
+  });
+}
+
 function buildFallbackReceiptHtml(d: ThermalReceiptData) {
-  const items = (d.cart || [])
+  const model = buildCanonicalReceiptModel(d);
+  const items = (model.items || [])
     .map((it) => {
-      const name = esc(String(it?.product?.name || "Item"));
-      const qty = Number(it?.quantity || 0);
-      const unit = Number(it?.customPrice ?? it?.product?.price ?? 0);
-      const line = qty * unit;
+      const name = esc(String(it.name || "Item"));
       return `
         <div style="margin-bottom:6px;">
           <div style="font-weight:700;">${name}</div>
           <div style="display:flex;justify-content:space-between;">
-            <span>${qty} x ${money(unit)}</span>
-            <span>${money(line)}</span>
+            <span>${it.qty} x ${money(it.unit)}</span>
+            <span>${money(it.lineTotal)}</span>
           </div>
+          ${
+            it.lineDiscount > 0
+              ? `<div style="display:flex;justify-content:space-between;font-size:10px;">
+                  <span>Disc</span>
+                  <span>-${money(it.lineDiscount)}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:10px;font-weight:700;">
+                  <span>Line Total</span>
+                  <span>${money(it.finalLine)}</span>
+                </div>`
+              : ""
+          }
+          ${it.customDescription ? `<div style="font-size:10px;font-style:italic;">- ${esc(it.customDescription)}</div>` : ""}
         </div>
       `;
     })
@@ -108,22 +143,60 @@ function buildFallbackReceiptHtml(d: ThermalReceiptData) {
 
   return `
     <div style="width:58mm;padding:6px;font-family:monospace;font-size:11px;line-height:1.3;color:#000;background:#fff;">
-      <div style="text-align:center;font-weight:800;font-size:16px;">BINANCEXI POS</div>
-      <div style="text-align:center;">Receipt: ${esc(d.receiptNumber)}</div>
-      <div style="text-align:center;">${esc(d.timestamp)}</div>
-      <div style="text-align:center;margin-bottom:6px;">Staff: ${esc(d.cashierName || "Staff")}</div>
-      ${d.customerName ? `<div style="margin-bottom:6px;">Customer: ${esc(d.customerName)}</div>` : ""}
+      ${
+        model.header.logoUrl
+          ? `<div style="text-align:center;margin-bottom:4px;"><img src="${esc(model.header.logoUrl)}" alt="${esc(model.header.logoAlt)}" style="max-width:${Number(model.header.logoMaxWidthPx || 148)}px;max-height:${Number(model.header.logoMaxHeightPx || 34)}px;width:auto;height:auto;" /></div>`
+          : ""
+      }
+      <div style="text-align:center;font-weight:800;font-size:11px;letter-spacing:1px;">${model.header.brandTitleLines
+        .map((line) => esc(line))
+        .join("<br/>")}</div>
+      ${model.header.brandSupportLine ? `<div style="text-align:center;font-size:9px;margin-top:2px;">${esc(model.header.brandSupportLine)}</div>` : ""}
+      <div style="text-align:center;font-weight:800;font-size:16px;margin-top:4px;">${esc(model.header.businessName)}</div>
+      ${model.header.address ? `<div style="text-align:center;">${esc(model.header.address)}</div>` : ""}
+      ${model.header.phone ? `<div style="text-align:center;">${esc(model.header.phone)}</div>` : ""}
+      ${model.header.taxId ? `<div style="text-align:center;font-weight:700;">TAX: ${esc(model.header.taxId)}</div>` : ""}
+      <div style="border-top:1px dashed #000;margin:6px 0;"></div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;">
+        <div>
+          <div>${esc(model.meta.dateLabel)}</div>
+          <div>${esc(model.meta.timeLabel)}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-weight:700;">#${esc(model.meta.receiptNumber)}</div>
+          <div>Staff: ${esc(model.meta.cashierName)}</div>
+        </div>
+      </div>
+      <div style="text-align:center;border:1px solid #000;padding:4px;margin-top:6px;margin-bottom:6px;font-weight:700;">Customer: ${esc(model.meta.customerName)}</div>
       <div style="border-top:1px dashed #000;margin:6px 0;"></div>
       ${items || "<div>No items</div>"}
       <div style="border-top:1px dashed #000;margin:6px 0;"></div>
-      <div style="display:flex;justify-content:space-between;"><span>Subtotal</span><span>${money(d.subtotal)}</span></div>
-      <div style="display:flex;justify-content:space-between;"><span>Discount</span><span>${money(d.discount)}</span></div>
-      <div style="display:flex;justify-content:space-between;"><span>Tax</span><span>${money(d.tax)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Subtotal</span><span>${money(model.totals.subtotal)}</span></div>
+      ${
+        model.totals.showGlobalDiscount
+          ? `<div style="display:flex;justify-content:space-between;"><span>Discount${
+              model.totals.activeDiscountName ? ` (${esc(model.totals.activeDiscountName)})` : ""
+            }</span><span>-${money(model.totals.discount)}</span></div>`
+          : ""
+      }
+      ${
+        model.totals.showTax
+          ? `<div style="display:flex;justify-content:space-between;"><span>Tax${
+              typeof model.totals.taxRatePct === "number" ? ` (${esc(String(model.totals.taxRatePct))}%)` : ""
+            }</span><span>${money(model.totals.tax)}</span></div>`
+          : ""
+      }
       <div style="display:flex;justify-content:space-between;font-weight:800;font-size:13px;margin-top:4px;">
-        <span>TOTAL</span><span>${money(d.total)}</span>
+        <span>TOTAL</span><span>${money(model.totals.total)}</span>
       </div>
-      <div style="text-align:center;margin-top:8px;">Paid: ${esc(String(d.paymentMethod || "cash").toUpperCase())}</div>
-      <div style="text-align:center;margin-top:8px;">Thank you!</div>
+      <div style="text-align:center;margin-top:8px;">Paid via ${esc(model.meta.paymentMethod)}</div>
+      ${
+        model.verification.showQrCode
+          ? `<div style="text-align:center;margin-top:8px;font-size:10px;">Scan to Verify</div><div style="text-align:center;font-size:9px;word-break:break-all;">ID: ${esc(model.meta.receiptId)}</div><div style="text-align:center;font-size:9px;word-break:break-all;">${esc(model.verification.payload)}</div>`
+          : ""
+      }
+      ${model.footer.footerMessage ? `<div style="text-align:center;margin-top:8px;white-space:pre-wrap;text-transform:uppercase;">${esc(model.footer.footerMessage)}</div>` : ""}
+      <div style="text-align:center;margin-top:8px;font-size:9px;font-weight:700;">${esc(model.footer.poweredByLine)}</div>
     </div>
   `;
 }
@@ -234,45 +307,212 @@ async function printHtmlInIframe(receiptHtml: string) {
   }
 }
 
-function buildEscPos(d: ThermalReceiptData) {
+function splitPrinterText(text: string, width = 32) {
+  const raw = String(text || "").trim();
+  if (!raw) return [""];
+  const words = raw.split(/\s+/);
+  const lines: string[] = [];
+  let line = "";
+
+  for (const word of words) {
+    if (!line) {
+      if (word.length <= width) {
+        line = word;
+        continue;
+      }
+      for (let i = 0; i < word.length; i += width) lines.push(word.slice(i, i + width));
+      line = "";
+      continue;
+    }
+    if ((line + " " + word).length <= width) {
+      line += " " + word;
+      continue;
+    }
+    lines.push(line);
+    if (word.length <= width) {
+      line = word;
+    } else {
+      for (let i = 0; i < word.length; i += width) lines.push(word.slice(i, i + width));
+      line = "";
+    }
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [raw.slice(0, width)];
+}
+
+function escPosQr(payload: string) {
+  const data = encoder.encode(String(payload || ""));
+  const storeLen = data.length + 3;
+  const pL = storeLen & 0xff;
+  const pH = (storeLen >> 8) & 0xff;
+
+  return concat([
+    bytes(GS, 0x28, 0x6b, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00), // model 2
+    bytes(GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x43, 0x05), // module size
+    bytes(GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x45, 0x31), // error correction M
+    bytes(GS, 0x28, 0x6b, pL, pH, 0x31, 0x50, 0x30), // store
+    data,
+    bytes(GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x51, 0x30), // print
+  ]);
+}
+
+async function loadImageForRaster(src: string): Promise<HTMLImageElement> {
+  return await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Logo image failed to load"));
+    img.src = src;
+  });
+}
+
+async function escPosRasterImage(src: string, opts?: { maxWidth?: number; maxHeight?: number }) {
+  if (typeof document === "undefined") return null;
+  const maxWidth = Math.max(64, Math.min(384, Math.trunc(opts?.maxWidth ?? 224)));
+  const maxHeight = Math.max(16, Math.min(128, Math.trunc(opts?.maxHeight ?? 56)));
+
+  try {
+    const img = await loadImageForRaster(src);
+    const naturalW = Math.max(1, img.naturalWidth || img.width || maxWidth);
+    const naturalH = Math.max(1, img.naturalHeight || img.height || maxHeight);
+    const scale = Math.min(maxWidth / naturalW, maxHeight / naturalH);
+    let width = Math.max(8, Math.round(naturalW * scale));
+    let height = Math.max(8, Math.round(naturalH * scale));
+    width = Math.min(maxWidth, Math.ceil(width / 8) * 8);
+    height = Math.min(maxHeight, height);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, 0, 0, width, height);
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const data = imageData.data;
+    const xBytes = width / 8;
+    const raster = new Uint8Array(xBytes * height);
+
+    for (let y = 0; y < height; y++) {
+      for (let xByte = 0; xByte < xBytes; xByte++) {
+        let byteVal = 0;
+        for (let bit = 0; bit < 8; bit++) {
+          const x = xByte * 8 + bit;
+          const idx = (y * width + x) * 4;
+          const r = data[idx] ?? 255;
+          const g = data[idx + 1] ?? 255;
+          const b = data[idx + 2] ?? 255;
+          const a = data[idx + 3] ?? 255;
+          const luminance = (r * 0.299 + g * 0.587 + b * 0.114) * (a / 255) + 255 * (1 - a / 255);
+          if (luminance < 180) byteVal |= 1 << (7 - bit);
+        }
+        raster[y * xBytes + xByte] = byteVal;
+      }
+    }
+
+    const xL = xBytes & 0xff;
+    const xH = (xBytes >> 8) & 0xff;
+    const yL = height & 0xff;
+    const yH = (height >> 8) & 0xff;
+    return concat([bytes(GS, 0x76, 0x30, 0x00, xL, xH, yL, yH), raster]);
+  } catch (err) {
+    console.warn("[print] receipt logo raster skipped:", err);
+    return null;
+  }
+}
+
+async function buildEscPos(d: ThermalReceiptData) {
+  const model = buildCanonicalReceiptModel(d);
   const parts: Uint8Array[] = [];
+  const divider = "-".repeat(32);
 
   parts.push(bytes(ESC, 0x40)); // init
   parts.push(bytes(ESC, 0x61, 0x01)); // center
-  parts.push(bytes(ESC, 0x45, 0x01)); // bold on
-  parts.push(textLine("BINANCEXI POS"));
-  parts.push(bytes(ESC, 0x45, 0x00)); // bold off
-  parts.push(textLine(`Receipt: ${d.receiptNumber}`));
-  parts.push(textLine(d.timestamp));
-  parts.push(textLine(`Staff: ${d.cashierName}`));
-  if (d.customerName?.trim()) parts.push(textLine(`Customer: ${d.customerName.trim()}`));
-  parts.push(bytes(ESC, 0x61, 0x00)); // left
 
-  parts.push(textLine("--------------------------------"));
-
-  for (const it of d.cart) {
-    const name = String(it.product?.name ?? "Item").slice(0, 20);
-    const qty = Number(it.quantity || 0);
-    const price = Number(it.customPrice ?? it.product?.price ?? 0);
-    const total = qty * price;
-
-    parts.push(textLine(name));
-    parts.push(textLine(leftRight(`  ${qty} x ${money(price)}`, money(total))));
+  if (model.header.logoUrl) {
+    const rasterLogo = await escPosRasterImage(model.header.logoUrl, {
+      maxWidth: 224,
+      maxHeight: Math.max(32, Number(model.header.logoMaxHeightPx || 40) * 2),
+    });
+    if (rasterLogo) {
+      parts.push(rasterLogo);
+      parts.push(textLine(""));
+    }
   }
 
-  parts.push(textLine("--------------------------------"));
-  parts.push(textLine(leftRight("Subtotal", money(d.subtotal))));
-  if (d.discount > 0) parts.push(textLine(leftRight("Discount", `-${money(d.discount)}`)));
-  if (d.tax > 0) parts.push(textLine(leftRight("Tax", money(d.tax))));
+  parts.push(bytes(ESC, 0x45, 0x01)); // bold on
+  for (const line of model.header.brandTitleLines) {
+    if (!line) continue;
+    parts.push(textLine(line));
+  }
+  parts.push(bytes(ESC, 0x45, 0x00)); // bold off
+  if (model.header.brandSupportLine) parts.push(textLine(model.header.brandSupportLine));
+  parts.push(textLine(model.header.businessName));
+  if (model.header.address) {
+    for (const line of splitPrinterText(model.header.address, 32)) parts.push(textLine(line));
+  }
+  if (model.header.phone) parts.push(textLine(model.header.phone));
+  if (model.header.taxId) parts.push(textLine(`TAX: ${model.header.taxId}`));
+
+  parts.push(textLine(divider));
+  parts.push(bytes(ESC, 0x61, 0x00)); // left align
+  parts.push(textLine(model.meta.dateLabel));
+  parts.push(textLine(model.meta.timeLabel));
+  parts.push(textLine(leftRight(`#${model.meta.receiptNumber}`, `Staff:${model.meta.cashierName.slice(0, 10)}`)));
+  parts.push(textLine(`Customer: ${model.meta.customerName}`));
+  parts.push(textLine(divider));
+
+  for (const it of model.items) {
+    for (const line of splitPrinterText(it.name, 32)) parts.push(textLine(line));
+    parts.push(textLine(leftRight(`${it.qty} x ${money(it.unit)}`, money(it.lineTotal))));
+    if (it.lineDiscount > 0) {
+      parts.push(textLine(leftRight("Disc", `-${money(it.lineDiscount)}`)));
+      parts.push(textLine(leftRight("Line Total", money(it.finalLine))));
+    }
+    if (it.customDescription) {
+      for (const line of splitPrinterText(`- ${it.customDescription}`, 32)) parts.push(textLine(line));
+    }
+  }
+
+  parts.push(textLine(divider));
+  parts.push(textLine(leftRight("Subtotal", money(model.totals.subtotal))));
+  if (model.totals.showGlobalDiscount) {
+    const label = model.totals.activeDiscountName ? `Discount (${model.totals.activeDiscountName})` : "Discount";
+    parts.push(textLine(leftRight(label.slice(0, 18), `-${money(model.totals.discount)}`)));
+  }
+  if (model.totals.showTax) {
+    const taxLabel =
+      typeof model.totals.taxRatePct === "number" ? `Tax (${model.totals.taxRatePct}%)` : "Tax";
+    parts.push(textLine(leftRight(taxLabel, money(model.totals.tax))));
+  }
 
   parts.push(bytes(ESC, 0x45, 0x01)); // bold
-  parts.push(textLine(leftRight("TOTAL", money(d.total))));
+  parts.push(textLine(leftRight("TOTAL", money(model.totals.total))));
   parts.push(bytes(ESC, 0x45, 0x00));
+  parts.push(textLine(divider));
+  parts.push(bytes(ESC, 0x61, 0x01)); // center
+  parts.push(textLine(`Paid via ${String(model.meta.paymentMethod || "").toUpperCase()}`));
 
-  parts.push(textLine("--------------------------------"));
-  parts.push(bytes(ESC, 0x61, 0x01));
-  parts.push(textLine(`Paid: ${String(d.paymentMethod).toUpperCase()}`));
-  parts.push(textLine("Thank you!"));
+  if (model.verification.showQrCode && model.verification.payload) {
+    try {
+      parts.push(textLine(""));
+      parts.push(escPosQr(model.verification.payload));
+      parts.push(textLine("Scan to Verify"));
+    } catch (err) {
+      console.warn("[print] qr command generation failed:", err);
+    }
+    parts.push(textLine(`ID: ${model.meta.receiptId}`));
+  }
+
+  if (model.footer.footerMessage) {
+    for (const line of splitPrinterText(model.footer.footerMessage.toUpperCase(), 32)) {
+      parts.push(textLine(line));
+    }
+  }
+  parts.push(textLine(model.footer.poweredByLine));
   parts.push(bytes(ESC, 0x61, 0x00));
 
   // Feed extra lines so the tear/cut doesn't eat the last line.
@@ -408,6 +648,16 @@ async function sendTcpDesktopViaTauri(ip: string, port: number, data: Uint8Array
 export async function printReceiptSmart(d: ThermalReceiptData) {
   const platform = Capacitor.getPlatform();
   const tauriRuntime = isTauriRuntime();
+  const model = buildCanonicalReceiptModel(d);
+  const debugEnabled =
+    !!(import.meta as any)?.env?.DEV || localStorage.getItem("binancexi_debug_receipt_qr") === "1";
+  if (debugEnabled) {
+    console.info("[receipt-print] canonical payload", {
+      receiptId: model.meta.receiptId,
+      receiptNumber: model.meta.receiptNumber,
+      verificationPayload: model.verification.payload,
+    });
+  }
 
   // Default modes:
   // - Android -> bt (no popup)
@@ -415,7 +665,7 @@ export async function printReceiptSmart(d: ThermalReceiptData) {
   const storedMode = (localStorage.getItem(PRINTER_MODE_KEY) || "").trim();
   const mode = normalizePrinterMode(storedMode || (platform === "android" ? "bt" : "browser"), platform);
 
-  const escpos = buildEscPos(d);
+  const escpos = await buildEscPos(d);
 
   // ✅ ANDROID
   if (platform === "android") {

@@ -1,9 +1,15 @@
+import receiptLogoUrl from "@/assets/binancexi-receipt-logo.svg";
+
 // BinanceXI POS (by Binance Labs)
 export type BrandConfig = {
   name: string;
   shortName: string;
   receiptTitleLines: string[];
   supportLine?: string;
+  receiptLogoUrl?: string;
+  receiptLogoAlt?: string;
+  receiptLogoMaxWidthPx?: number;
+  receiptLogoMaxHeightPx?: number;
   colors: {
     primary: string;
     accent: string;
@@ -16,6 +22,10 @@ export const BRAND: BrandConfig = {
   shortName: "BinanceXI",
   receiptTitleLines: ["BINANCEXI", "POS"],
   supportLine: "by Binance Labs",
+  receiptLogoUrl,
+  receiptLogoAlt: "BinanceXI POS",
+  receiptLogoMaxWidthPx: 148,
+  receiptLogoMaxHeightPx: 34,
   colors: {
     // Blue/cyan scheme.
     primary: "#197cbc",

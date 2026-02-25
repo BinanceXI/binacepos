@@ -1,7 +1,10 @@
+import type { ReceiptStoreSettings } from "@/core/receipts/receiptPrintModel";
+
 // File: src/lib/printQueue.ts
 const KEY = "binancexi_thermal_print_queue_v1";
 
 export type ThermalJob = {
+  receiptId?: string;
   receiptNumber: string;
   timestamp: string;
   cashierName: string;
@@ -12,6 +15,9 @@ export type ThermalJob = {
   discount: number;
   tax: number;
   total: number;
+  activeDiscountName?: string | null;
+  taxRatePct?: number | null;
+  settings?: ReceiptStoreSettings | null;
 };
 
 function readQueue(): ThermalJob[] {

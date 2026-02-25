@@ -38,6 +38,7 @@ import { tryPrintThermalQueue } from "@/lib/thermalPrint";
 import { ServiceBookingsDialog } from "@/components/services/ServiceBookingsDialog";
 import { pullRecentServiceBookings, pushUnsyncedServiceBookings } from "@/lib/serviceBookings";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import type { ReceiptStoreSettings } from "@/core/receipts/receiptPrintModel";
 
 
 type FocusArea = "search" | "customer" | "products" | "cart";
@@ -94,6 +95,15 @@ export const POSPage = () => {
   return true;
 }, []);
   const queryClient = useQueryClient();
+  const { data: receiptStoreSettings } = useQuery<ReceiptStoreSettings>({
+    queryKey: ["storeSettings"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("store_settings").select("*").maybeSingle();
+      if (error) throw error;
+      return (data || {}) as ReceiptStoreSettings;
+    },
+    staleTime: 1000 * 60 * 60,
+  });
 
   // ---- PRINTING STATE ----
   const [lastOrderData, setLastOrderData] = useState<any>(null);
@@ -132,6 +142,7 @@ useEffect(() => {
 
   // 1) Always queue first (safe)
   enqueueThermalJob({
+    receiptId: lastOrderData.receiptId,
     receiptNumber: lastOrderData.receiptNumber,
     timestamp: lastOrderData.timestamp,
     cashierName: lastOrderData.cashierName,
@@ -142,6 +153,9 @@ useEffect(() => {
     discount: lastOrderData.globalDiscount,
     tax: lastOrderData.tax,
     total: lastOrderData.total,
+    activeDiscountName: lastOrderData.activeDiscount?.name || null,
+    taxRatePct: lastOrderData.taxRatePct ?? null,
+    settings: lastOrderData.storeSettingsSnapshot || null,
   });
 
   // 2) Print queue (browser mode calls window.print inside thermalPrint.ts)
@@ -423,6 +437,7 @@ const [showMobileCart, setShowMobileCart] = useState(false);
     timestamp,
     activeDiscount: activeDiscount ?? null,
     taxRatePct,
+    storeSettingsSnapshot: receiptStoreSettings || null,
   });
 
   // ✅ reset POS after sale
@@ -461,9 +476,10 @@ const [showMobileCart, setShowMobileCart] = useState(false);
         timestamp: args.timestamp,
         activeDiscount: null,
         taxRatePct: 0,
+        storeSettingsSnapshot: receiptStoreSettings || null,
       });
     },
-    [currentUser]
+    [currentUser, receiptStoreSettings]
   );
 
   const openNewServiceBooking = useCallback(() => {
@@ -1274,6 +1290,8 @@ const [showMobileCart, setShowMobileCart] = useState(false);
       tax={lastOrderData.tax}
       activeDiscount={lastOrderData.activeDiscount}
       taxRatePct={lastOrderData.taxRatePct}
+      timestamp={lastOrderData.timestamp}
+      settingsOverride={lastOrderData.storeSettingsSnapshot || null}
     />
   )}
 </div>

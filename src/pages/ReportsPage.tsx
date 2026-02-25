@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { 
   startOfDay, endOfDay, subDays, startOfMonth, startOfYear, 
-  endOfMonth, format, parseISO, isWithinInterval 
+  endOfMonth, format, parseISO
 } from 'date-fns';
 import { motion } from 'framer-motion';
 import {
@@ -24,97 +24,24 @@ import { cn } from '@/lib/utils';
 import { usePOS } from '@/contexts/POSContext';
 import { listExpenses } from '@/lib/expenses';
 import { listLocalServiceBookings, type LocalServiceBooking } from '@/lib/serviceBookings';
-import { readScopedJSON, resolveTenantScope, tenantScopeKey, writeScopedJSON } from '@/lib/tenantScope';
-
-const OFFLINE_QUEUE_KEY = 'binancexi_offline_queue';
-const ORDERS_CACHE_KEY = 'binancexi_orders_cache_v1';
-
-type OrderItemRow = {
-  quantity: number;
-  price_at_sale: number;
-  product_name: string;
-  service_note?: string | null;
-};
-
-type OrderRow = {
-  id: string;
-  total_amount: number;
-  payment_method: string | null;
-  created_at: string;
-  cashier_id?: string | null;
-  sale_type?: string | null;
-  booking_id?: string | null;
-  profiles?: { full_name?: string | null } | null;
-  order_items?: OrderItemRow[] | null;
-};
-
-function readOrdersCache(scope: ReturnType<typeof resolveTenantScope>): OrderRow[] {
-  return readScopedJSON<OrderRow[]>(ORDERS_CACHE_KEY, [], {
-    scope,
-    migrateLegacy: true,
-  });
-}
-
-function writeOrdersCache(scope: ReturnType<typeof resolveTenantScope>, rows: OrderRow[]) {
-  writeScopedJSON(ORDERS_CACHE_KEY, rows, { scope });
-}
-
-function upsertOrdersCache(scope: ReturnType<typeof resolveTenantScope>, rows: OrderRow[]) {
-  const cur = readOrdersCache(scope);
-  const byId = new Map<string, OrderRow>();
-  for (const o of cur) {
-    if (o?.id) byId.set(String(o.id), o);
-  }
-  for (const o of rows) {
-    if (o?.id) byId.set(String(o.id), o);
-  }
-
-  const merged = Array.from(byId.values()).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
-  const pruned = merged.slice(0, 3000);
-  writeOrdersCache(scope, pruned);
-}
-
-function offlineQueueToOrders(scope: ReturnType<typeof resolveTenantScope>): OrderRow[] {
-  const queue = readScopedJSON<any[]>(OFFLINE_QUEUE_KEY, [], {
-    scope,
-    migrateLegacy: true,
-  });
-  return (queue || [])
-    .map((sale: any) => {
-      const created_at = String(sale?.meta?.timestamp || new Date().toISOString());
-      const items = Array.isArray(sale?.items) ? sale.items : [];
-      const saleType =
-        String(sale?.saleType || sale?.meta?.saleType || '').trim() ||
-        (items.some((i: any) => i?.product?.type === 'service') ? 'service' : 'product');
-
-      const bookingId = sale?.bookingId ?? sale?.meta?.bookingId ?? null;
-
-      return {
-        id: String(sale?.meta?.receiptId || `offline-${created_at}`),
-        total_amount: Number(sale?.total || 0),
-        payment_method: String(sale?.payments?.[0]?.method || 'cash'),
-        created_at,
-        sale_type: saleType,
-        booking_id: bookingId ? String(bookingId) : null,
-        profiles: { full_name: 'Offline' },
-        order_items: items.map((i: any) => ({
-          quantity: Number(i?.quantity || 0),
-          price_at_sale: Number(i?.customPrice ?? i?.product?.price ?? 0),
-          product_name: String(i?.product?.name || 'Unknown'),
-          service_note: i?.customDescription ? String(i.customDescription) : null,
-        })),
-      } as OrderRow;
-    })
-    .filter(Boolean);
-}
-
-function inRange(iso: string, start: Date, end: Date) {
-  try {
-    return isWithinInterval(parseISO(iso), { start, end });
-  } catch {
-    return false;
-  }
-}
+import { resolveTenantScope, tenantScopeKey } from '@/lib/tenantScope';
+import { isLikelyAuthError } from '@/lib/supabaseSession';
+import {
+  calculateMonthExpenseTotals,
+  calculateSalesStats,
+  inRange,
+  mergeOrdersForMetrics,
+  offlineQueueToOrders,
+  readOrdersCache,
+  sumOrdersRevenue,
+  type OrderRow,
+  type SalesRangeType,
+  upsertOrdersCache,
+} from '@/core/reports/reportMetrics';
+import {
+  REPORTS_OFFLINE_BANNER,
+  requireAuthedSessionOrOfflineBanner,
+} from '@/core/auth-gates/reportsSessionGate';
 
 async function fetchOrdersRemote(startISO: string, endISO: string): Promise<OrderRow[]> {
   const withProfiles = await supabase
@@ -244,6 +171,11 @@ export const ReportsPage = () => {
     from: new Date(),
     to: new Date(),
   });
+  const [offlineBanner, setOfflineBanner] = useState<string | null>(null);
+
+  const updateOfflineBanner = useCallback((next: string | null) => {
+    setOfflineBanner((prev) => (prev === next ? prev : next));
+  }, []);
 
   useEffect(() => {
     const onOn = () => setIsOnline(true);
@@ -273,18 +205,24 @@ export const ReportsPage = () => {
 
       const queued = offlineQueueToOrders(scope).filter((o) => inRange(o.created_at, start, end));
       const cached = readOrdersCache(scope).filter((o) => inRange(o.created_at, start, end));
+      const fallbackRows = mergeOrdersForMetrics(cached, queued);
 
-      if (!isOnline) {
-        return [...cached, ...queued].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+      const gate = await requireAuthedSessionOrOfflineBanner({ isOnline });
+      if (gate.mode === 'offline') {
+        updateOfflineBanner(gate.banner);
+        return fallbackRows;
       }
 
       try {
         const remote = await fetchOrdersRemote(monthRange.from, monthRange.to);
         upsertOrdersCache(scope, remote);
-        return [...remote, ...queued];
+        updateOfflineBanner(null);
+        return mergeOrdersForMetrics(remote, queued);
       } catch (e) {
         console.warn('[reports] month fetch failed, using cache fallback:', e);
-        return [...cached, ...queued].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+        if (isLikelyAuthError(e)) updateOfflineBanner(REPORTS_OFFLINE_BANNER);
+        else if (!navigator.onLine) updateOfflineBanner(REPORTS_OFFLINE_BANNER);
+        return fallbackRows;
       }
     },
     staleTime: 1000 * 60 * 5,
@@ -293,7 +231,7 @@ export const ReportsPage = () => {
   });
 
   const monthRevenue = useMemo(
-    () => (monthOrders || []).reduce((sum: number, o: any) => sum + Number(o.total_amount || 0), 0),
+    () => sumOrdersRevenue(monthOrders || []),
     [monthOrders]
   );
 
@@ -305,17 +243,10 @@ export const ReportsPage = () => {
     refetchOnReconnect: true,
   });
 
-  const monthExpenseTotals = useMemo(() => {
-    let expenses = 0;
-    let drawings = 0;
-    (monthExpenses || []).forEach((e: any) => {
-      const amt = Number(e.amount || 0);
-      if (e.expense_type === 'owner_draw' || e.expense_type === 'owner_drawing') drawings += amt;
-      else expenses += amt;
-    });
-    const net = monthRevenue - (expenses + drawings);
-    return { expenses, drawings, net };
-  }, [monthExpenses, monthRevenue]);
+  const monthExpenseTotals = useMemo(
+    () => calculateMonthExpenseTotals(monthExpenses as any[], monthRevenue),
+    [monthExpenses, monthRevenue]
+  );
 
   const { data: monthBookings = [] } = useQuery({
     queryKey: ['p5MonthBookings', monthRange.from, monthRange.to],
@@ -383,91 +314,34 @@ export const ReportsPage = () => {
 
       const queued = offlineQueueToOrders(scope).filter((o) => inRange(o.created_at, start, end));
       const cached = readOrdersCache(scope).filter((o) => inRange(o.created_at, start, end));
+      const fallbackRows = mergeOrdersForMetrics(cached, queued);
 
-      // Offline-first: render from cached + queued sales
-      if (!isOnline) {
-        return [...cached, ...queued].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+      const gate = await requireAuthedSessionOrOfflineBanner({ isOnline });
+      if (gate.mode === 'offline') {
+        updateOfflineBanner(gate.banner);
+        return fallbackRows;
       }
 
       try {
         const remote = await fetchOrdersRemote(start.toISOString(), end.toISOString());
         upsertOrdersCache(scope, remote);
-        return [...remote, ...queued];
+        updateOfflineBanner(null);
+        return mergeOrdersForMetrics(remote, queued);
       } catch (e) {
         console.warn('[reports] sales fetch failed, using cache fallback:', e);
-        return [...cached, ...queued].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+        if (isLikelyAuthError(e)) updateOfflineBanner(REPORTS_OFFLINE_BANNER);
+        else if (!navigator.onLine) updateOfflineBanner(REPORTS_OFFLINE_BANNER);
+        return fallbackRows;
       }
     },
     staleTime: 1000 * 60 * 5 // Cache for 5 mins
   });
 
   // --- 2. CALCULATE METRICS ---
-  const stats = useMemo(() => {
-    let totalRevenue = 0;
-    let transactionCount = 0;
-    const paymentMethods = { cash: 0, card: 0, ecocash: 0 };
-    const cashierPerformance: Record<string, number> = {};
-    const chartData: any[] = [];
-    const productSales: Record<string, number> = {};
-
-    // Grouping for Chart
-    const timeMap: Record<string, number> = {};
-
-    salesData.forEach((order: any) => {
-      const amount = Number(order.total_amount);
-      totalRevenue += amount;
-      transactionCount++;
-
-      // Payment Splits
-      const method = order.payment_method?.toLowerCase() || 'cash';
-      if (method.includes('card') || method.includes('swipe')) paymentMethods.card += amount;
-      else if (method.includes('eco') || method.includes('mobile')) paymentMethods.ecocash += amount;
-      else paymentMethods.cash += amount;
-
-      // Cashier Stats
-      const cashierName = order.profiles?.full_name || 'Unknown';
-      cashierPerformance[cashierName] = (cashierPerformance[cashierName] || 0) + amount;
-
-      // Product Stats
-      order.order_items?.forEach((item: any) => {
-        const pName = item.product_name || 'Unknown';
-        productSales[pName] = (productSales[pName] || 0) + item.quantity;
-      });
-
-      // Chart Data Grouping
-      const date = parseISO(order.created_at);
-      let key = format(date, 'HH:00'); // Default Hourly
-      if (rangeType === 'month' || rangeType === 'year' || rangeType === 'week') {
-        key = format(date, 'MMM dd'); // Daily for longer ranges
-      }
-      timeMap[key] = (timeMap[key] || 0) + amount;
-    });
-
-    // Format Chart Data
-    Object.keys(timeMap).forEach(key => {
-      chartData.push({ name: key, value: timeMap[key] });
-    });
-
-    const avgTicket = transactionCount > 0 ? totalRevenue / transactionCount : 0;
-    const topProducts = Object.entries(productSales)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 5)
-      .map(([name, qty]) => ({ name, qty }));
-
-    const topCashiers = Object.entries(cashierPerformance)
-      .sort(([, a], [, b]) => b - a)
-      .map(([name, total]) => ({ name, total }));
-
-    return {
-      totalRevenue,
-      transactionCount,
-      avgTicket,
-      paymentMethods,
-      chartData,
-      topProducts,
-      topCashiers
-    };
-  }, [salesData, rangeType]);
+  const stats = useMemo(
+    () => calculateSalesStats(salesData as OrderRow[], rangeType as SalesRangeType),
+    [salesData, rangeType]
+  );
 
   const handleExportPDF = () => {
     // Simple CSV Export logic for now (Robust PDF usually requires heavy libraries)
@@ -556,6 +430,12 @@ export const ReportsPage = () => {
         </div>
       </div>
 
+      {offlineBanner ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          {offlineBanner}
+        </div>
+      ) : null}
+
       {/* P4: This month widget */}
       <Card className="border-border/50 shadow-sm">
         <CardHeader className="pb-3">
@@ -589,8 +469,8 @@ export const ReportsPage = () => {
 	      <Card className="border-border/50 shadow-sm">
 	        <CardHeader className="pb-3">
 	          <CardTitle className="text-base font-semibold">This month (Goods vs Services)</CardTitle>
-	          {!isOnline && (
-	            <div className="text-xs text-muted-foreground">Offline: showing cached + queued sales</div>
+	          {offlineBanner && (
+	            <div className="text-xs text-muted-foreground">{offlineBanner}</div>
 	          )}
 	        </CardHeader>
 	        <CardContent>
