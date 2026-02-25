@@ -5,6 +5,14 @@ export type EnsureSupabaseSessionResult =
   | { ok: true; session: Session }
   | { ok: false; error: string };
 
+export type SyncBlockedReason = "AUTH_REQUIRED";
+
+export type RequireAuthedSessionOrBlockSyncResult =
+  | { ok: true; session: Session; userId: string }
+  | { ok: false; reason: SyncBlockedReason; message: string };
+
+export const SYNC_PAUSED_AUTH_MESSAGE = "Sync paused — sign in online to resume.";
+
 function sessionExpiresSoon(session: Session, withinMs: number) {
   const exp = session.expires_at ? session.expires_at * 1000 : null;
   if (!exp) return false;
@@ -54,3 +62,16 @@ export async function ensureSupabaseSession(): Promise<EnsureSupabaseSessionResu
   }
 }
 
+export async function requireAuthedSessionOrBlockSync(): Promise<RequireAuthedSessionOrBlockSyncResult> {
+  const sessionRes = await ensureSupabaseSession();
+  if (!sessionRes.ok) {
+    return { ok: false, reason: "AUTH_REQUIRED", message: SYNC_PAUSED_AUTH_MESSAGE };
+  }
+
+  const userId = String(sessionRes.session?.user?.id || "").trim();
+  if (!userId) {
+    return { ok: false, reason: "AUTH_REQUIRED", message: SYNC_PAUSED_AUTH_MESSAGE };
+  }
+
+  return { ok: true, session: sessionRes.session, userId };
+}

@@ -54,6 +54,8 @@ import { usePOS } from "@/contexts/POSContext";
 import { hashPassword } from "@/lib/auth/passwordKdf";
 import { getLocalUser, renameLocalUser, upsertLocalUser } from "@/lib/auth/localUserStore";
 import { supabase } from "@/lib/supabase";
+import { EXPECTED_SUPABASE_REFS, getBackendInfo } from "@/lib/backendInfo";
+import { ensureSupabaseSession } from "@/lib/supabaseSession";
 import { getConfiguredPublicAppUrl, normalizeBaseUrl } from "@/lib/verifyUrl";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -162,6 +164,36 @@ function notifySettingsChanged() {
   window.dispatchEvent(new Event("binancexi_settings_changed"));
 }
 
+function friendlyAdminError(e: any) {
+  const status = (e as any)?.status;
+  const msg = String((e as any)?.message || "");
+  const lower = msg.toLowerCase();
+
+  // PostgREST often returns 404 for unauthorized RPCs.
+  if (status === 404)
+    return "Not authorized (cloud session missing). Sign out and sign in again while online.";
+  if (status === 401)
+    return "Cloud session missing. Sign out and sign in again while online.";
+  if (status === 403) return "Access denied.";
+
+  if (
+    lower.includes("missing or invalid user session") ||
+    lower.includes("invalid user session")
+  ) {
+    return "Cloud session missing. Sign out and sign in again while online.";
+  }
+
+  if (
+    lower.includes("foreign key") ||
+    lower.includes("constraint") ||
+    lower.includes("related records")
+  ) {
+    return "Cannot permanently delete this user because linked history exists. Deactivate instead.";
+  }
+
+  return msg || "Request failed";
+}
+
 function syncSettingsToLocalStorage(s: StoreSettings) {
   localStorage.setItem(TAX_RATE_KEY, String(normalizeTaxRate(s.tax_rate ?? 0)));
   localStorage.setItem(TAX_INCLUDED_KEY, s.tax_included ? "1" : "0");
@@ -176,6 +208,9 @@ function syncSettingsToLocalStorage(s: StoreSettings) {
 export const SettingsPage = () => {
   const { currentUser, setCurrentUser } = usePOS();
   const queryClient = useQueryClient();
+  const backendInfo = useMemo(() => getBackendInfo(), []);
+  const expectedRefs = EXPECTED_SUPABASE_REFS as readonly string[];
+  const backendOk = !!backendInfo.supabaseRef && expectedRefs.includes(backendInfo.supabaseRef);
   const configuredPublicAppUrl = getConfiguredPublicAppUrl();
   const isVerifyBaseManaged = !!configuredPublicAppUrl;
 
@@ -222,6 +257,12 @@ export const SettingsPage = () => {
   const [myNewPassword, setMyNewPassword] = useState("");
   const [myNewPassword2, setMyNewPassword2] = useState("");
   const [savingMyCreds, setSavingMyCreds] = useState(false);
+
+  const requireCloudSession = async () => {
+    const res = await ensureSupabaseSession();
+    if (res.ok) return;
+    throw new Error("Cloud session missing. Sign out and sign in again while online.");
+  };
 
   /* ============================
      STORE SETTINGS (DB)
@@ -364,6 +405,7 @@ export const SettingsPage = () => {
     mutationFn: async (user: any) => {
       if (!isAdmin) throw new Error("Admins only");
       if (!isOnline) throw new Error("You are offline");
+      await requireCloudSession();
 
       if (isSelf(currentUser?.id, user.id)) {
         throw new Error("You cannot deactivate your own account");
@@ -380,13 +422,14 @@ export const SettingsPage = () => {
       await queryClient.invalidateQueries({ queryKey: ["profiles"] });
       toast.success("User deactivated");
     },
-    onError: (e: any) => toast.error(e?.message || "Deactivate failed"),
+    onError: (e: any) => toast.error(friendlyAdminError(e) || "Deactivate failed"),
   });
 
   const activateUserMutation = useMutation({
     mutationFn: async (user: any) => {
       if (!isAdmin) throw new Error("Admins only");
       if (!isOnline) throw new Error("You are offline");
+      await requireCloudSession();
 
       if (isSelf(currentUser?.id, user.id)) {
         throw new Error("You cannot activate your own account");
@@ -403,13 +446,14 @@ export const SettingsPage = () => {
       await queryClient.invalidateQueries({ queryKey: ["profiles"] });
       toast.success("User activated");
     },
-    onError: (e: any) => toast.error(e?.message || "Activate failed"),
+    onError: (e: any) => toast.error(friendlyAdminError(e) || "Activate failed"),
   });
 
   const deleteUserMutation = useMutation({
     mutationFn: async (user: any) => {
       if (!isAdmin) throw new Error("Admins only");
       if (!isOnline) throw new Error("You are offline");
+      await requireCloudSession();
 
       if (isSelf(currentUser?.id, user.id)) {
         throw new Error("You cannot delete your own account");
@@ -429,7 +473,7 @@ export const SettingsPage = () => {
     },
     onError: (e: any) => {
       // If delete fails (often due to FK refs from orders), guide to deactivate instead.
-      toast.error(e?.message || "Delete failed");
+      toast.error(friendlyAdminError(e) || "Delete failed");
     },
   });
 
@@ -441,6 +485,7 @@ export const SettingsPage = () => {
     mutationFn: async (data: any) => {
       if (!isAdmin) throw new Error("Admins only");
       if (!isOnline) throw new Error("You are offline. Connect to manage users.");
+      await requireCloudSession();
 
       const permissions: UserPermissions = {
         ...DEFAULT_PERMS,
@@ -554,13 +599,14 @@ export const SettingsPage = () => {
         active: true,
       });
     },
-    onError: (err: any) => toast.error(err?.message || "User save failed"),
+    onError: (err: any) => toast.error(friendlyAdminError(err) || "User save failed"),
   });
 
   const quickCreateMutation = useMutation({
     mutationFn: async () => {
       if (!isAdmin) throw new Error("Admins only");
       if (!isOnline) throw new Error("You are offline");
+      await requireCloudSession();
 
       const username = sanitizeUsername(quickUsername);
       const password = String(quickPassword || "").trim() || `${username}123`;
@@ -626,7 +672,7 @@ export const SettingsPage = () => {
       setQuickReports(false);
       setQuickRefunds(false);
     },
-    onError: (e: any) => toast.error(e?.message || "Failed"),
+    onError: (e: any) => toast.error(friendlyAdminError(e) || "Failed"),
   });
 
   /* ============================
@@ -646,6 +692,8 @@ export const SettingsPage = () => {
 
     setSavingMyCreds(true);
     try {
+      await requireCloudSession();
+
       const prevUsername = sanitizeUsername((currentUser as any)?.username || "");
       const { error: profErr } = await supabase
         .from("profiles")
@@ -693,7 +741,7 @@ export const SettingsPage = () => {
       toast.success("Admin credentials updated");
       await queryClient.invalidateQueries({ queryKey: ["profiles"] });
     } catch (e: any) {
-      toast.error(e?.message || "Failed to update credentials");
+      toast.error(friendlyAdminError(e) || "Failed to update credentials");
     } finally {
       setSavingMyCreds(false);
     }
@@ -1633,6 +1681,45 @@ export const SettingsPage = () => {
 	                  </div>
 	                </CardContent>
 	              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Backend</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="text-sm">
+                    Supabase URL:{" "}
+                    <span className="font-mono text-xs break-all">
+                      {backendInfo.supabaseUrl || "NOT SET"}
+                    </span>
+                  </div>
+
+                  <div className="text-sm">
+                    Project ref:{" "}
+                    <span
+                      className={cn(
+                        "font-mono text-xs",
+                        backendOk ? "text-emerald-500" : "text-red-400"
+                      )}
+                    >
+                      {backendInfo.supabaseRef || "UNKNOWN"}
+                    </span>
+                    {!backendOk && (
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Expected: <span className="font-mono">{expectedRefs.join(", ")}</span>. If
+                        this is wrong, fix `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` in your
+                        build environment and redeploy/rebuild.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="text-xs text-muted-foreground font-mono">
+                    mode={backendInfo.mode || "unknown"}
+                    {backendInfo.appVersion ? `  version=${backendInfo.appVersion}` : ""}
+                    {backendInfo.appCommit ? `  commit=${backendInfo.appCommit.slice(0, 7)}` : ""}
+                  </div>
+                </CardContent>
+              </Card>
 	            </motion.div>
 	          )}
 

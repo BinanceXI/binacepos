@@ -1,7 +1,7 @@
 
 [functions.create_staff_user]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/create_staff_user/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -12,7 +12,7 @@ entrypoint = "./functions/create_staff_user/index.ts"
 
 [functions.upload_product_image]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/upload_product_image/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -23,12 +23,12 @@ entrypoint = "./functions/upload_product_image/index.ts"
 
 [functions.delete_staff_user]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 entrypoint = "./functions/delete_staff_user/index.ts"
 
 [functions.set_staff_password]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/set_staff_password/deno.json"
 entrypoint = "./functions/set_staff_password/index.ts"
 

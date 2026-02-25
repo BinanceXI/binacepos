@@ -132,6 +132,7 @@ function sanitizeUsername(raw: string) {
 function friendlyAdminError(e: any) {
   const status = (e as any)?.status;
   const msg = String((e as any)?.message || "");
+  const lower = msg.toLowerCase();
 
   // PostgREST often returns 404 for unauthorized RPCs.
   if (status === 404)
@@ -139,9 +140,18 @@ function friendlyAdminError(e: any) {
   if (status === 401)
     return "Cloud session missing. Sign out and sign in again while online.";
   if (status === 403) return "Access denied.";
-  if (msg.toLowerCase().includes("missing or invalid user session")) {
+  if (lower.includes("missing or invalid user session")) {
     return "Cloud session missing. Sign out and sign in again while online.";
   }
+
+  if (
+    lower.includes("foreign key") ||
+    lower.includes("constraint") ||
+    lower.includes("related records")
+  ) {
+    return "Cannot permanently delete this user because linked history exists. Deactivate instead.";
+  }
+
   return msg || "Request failed";
 }
 

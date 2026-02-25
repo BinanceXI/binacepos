@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase";
-import { ensureSupabaseSession } from "@/lib/supabaseSession";
+import { ensureSupabaseSession, requireAuthedSessionOrBlockSync } from "@/lib/supabaseSession";
 import {
   getTenantScopeFromLocalUser,
   readScopedJSON,
@@ -313,9 +313,9 @@ export async function pushUnsyncedServiceBookings(): Promise<{ pushed: number; f
   const unsynced = all.filter((b) => !b.synced);
   if (!unsynced.length) return { pushed: 0, failed: 0 };
 
-  const sessionRes = await ensureSupabaseSession();
-  if (!sessionRes.ok) {
-    const msg = sessionRes.error || "No active session";
+  const authGate = await requireAuthedSessionOrBlockSync();
+  if (!authGate.ok) {
+    const msg = authGate.message || "No active session";
     await Promise.all(
       unsynced.map((b) =>
         upsertLocalServiceBooking({

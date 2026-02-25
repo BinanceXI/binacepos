@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { requireAuthedSessionOrBlockSync, type SyncBlockedReason } from "@/lib/supabaseSession";
 import {
   getTenantScopeFromLocalUser,
   readScopedJSON,
@@ -26,6 +27,14 @@ export type Expense = {
 export type ExpenseRange = {
   from?: string; // ISO
   to?: string; // ISO
+};
+
+export type ExpenseSyncResult = {
+  attempted: number;
+  succeeded: number;
+  failed: number;
+  failures: Array<{ id: string; error: string }>;
+  blockedReason?: SyncBlockedReason;
 };
 
 // Offline sync uses an "expense_queue" where each expense id is either queued for upsert or queued for delete.
@@ -426,8 +435,8 @@ export function getExpenseQueueCount(): number {
   }
 }
 
-export async function syncExpenses(): Promise<void> {
-  if (!navigator.onLine) return;
+export async function syncExpenses(): Promise<ExpenseSyncResult> {
+  if (!navigator.onLine) return { attempted: 0, succeeded: 0, failed: 0, failures: [] };
 
   const queue = await listQueueLocal();
   if (!queue.length) {
@@ -437,9 +446,23 @@ export async function syncExpenses(): Promise<void> {
     } catch {
       // pull failures shouldn't block the rest of the app
     }
-    return;
+    return { attempted: 0, succeeded: 0, failed: 0, failures: [] };
   }
 
+  const authGate = await requireAuthedSessionOrBlockSync();
+  if (!authGate.ok) {
+    await Promise.all(queue.map((item) => upsertQueueLocal({ ...item, lastError: authGate.message } as any)));
+    return {
+      attempted: queue.length,
+      succeeded: 0,
+      failed: queue.length,
+      failures: queue.map((item) => ({ id: item.id, error: authGate.message })),
+      blockedReason: authGate.reason,
+    };
+  }
+
+  let succeeded = 0;
+  const failures: Array<{ id: string; error: string }> = [];
   for (const item of queue.sort((a, b) => (a.ts || 0) - (b.ts || 0))) {
     try {
       if (item.op === "upsert") {
@@ -453,16 +476,19 @@ export async function syncExpenses(): Promise<void> {
 
         await upsertExpenseLocal(row as Expense);
         await deleteQueueLocal(item.id);
+        succeeded += 1;
       }
 
       if (item.op === "delete") {
         const { error } = await supabase.from("expenses").delete().eq("id", item.id);
         if (error) throw error;
         await deleteQueueLocal(item.id);
+        succeeded += 1;
       }
     } catch (e: any) {
       const msg = e?.message || String(e);
       await upsertQueueLocal({ ...item, lastError: msg } as any);
+      failures.push({ id: item.id, error: msg });
     }
   }
 
@@ -472,6 +498,13 @@ export async function syncExpenses(): Promise<void> {
   } catch {
     // ignore
   }
+
+  return {
+    attempted: queue.length,
+    succeeded,
+    failed: failures.length,
+    failures,
+  };
 }
 
 async function pullRecentExpenses(daysBack: number): Promise<void> {

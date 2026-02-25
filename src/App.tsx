@@ -26,6 +26,7 @@ import { ProfitAnalysisPage } from "./pages/ProfitAnalysisPage";
 import { ExpensesPage } from "./pages/ExpensesPage";
 import { PlatformAdminPage } from "./pages/PlatformAdminPage";
 import NotFound from "./pages/NotFound";
+import { EXPECTED_SUPABASE_REFS, getBackendInfo } from "@/lib/backendInfo";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -179,6 +180,27 @@ const App = () => {
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     const shouldUseDark = saved ? saved === "dark" : prefersDark;
     document.documentElement.classList.toggle("dark", shouldUseDark);
+  }, []);
+
+  useEffect(() => {
+    const b = getBackendInfo();
+    const expected = EXPECTED_SUPABASE_REFS as readonly string[];
+    const ok = !!b.supabaseRef && expected.includes(b.supabaseRef);
+
+    const msg = `[backend] ref=${b.supabaseRef || "unknown"} mode=${b.mode || "unknown"}${
+      b.appVersion ? ` version=${b.appVersion}` : ""
+    }${b.appCommit ? ` commit=${b.appCommit.slice(0, 7)}` : ""}`;
+
+    if (!b.supabaseUrl) {
+      console.warn("[backend] Missing VITE_SUPABASE_URL. App will not be connected.");
+      return;
+    }
+
+    if (!ok) {
+      console.warn(`${msg} expected=${expected.join(", ")}`, { supabaseUrl: b.supabaseUrl });
+    } else {
+      console.info(msg, { supabaseUrl: b.supabaseUrl });
+    }
   }, []);
 
   return (

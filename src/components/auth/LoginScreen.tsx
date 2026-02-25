@@ -72,6 +72,41 @@ function loadTurnstileScript(): Promise<void> {
   return turnstileScriptPromise;
 }
 
+const CLOUD_ACCOUNT_INVALID_HINTS = [
+  "invalid credentials",
+  "account disabled",
+  "user profile not found",
+  "authenticated user does not match entered username",
+  "missing or invalid user session",
+  "invalid user session",
+] as const;
+
+function shouldInvalidateLocalUserAfterCloudFailure(err: any) {
+  const msg = String(err?.message || "").toLowerCase();
+  if (!msg) return false;
+  return CLOUD_ACCOUNT_INVALID_HINTS.some((hint) => msg.includes(hint));
+}
+
+function friendlyCloudAccountFailure(err: any) {
+  const msg = String(err?.message || "").trim();
+  const lower = msg.toLowerCase();
+
+  if (lower.includes("account disabled")) {
+    return "Account disabled. Contact your admin.";
+  }
+  if (lower.includes("invalid credentials")) {
+    return "Cloud credentials changed. Sign in again with your current password.";
+  }
+  if (lower.includes("user profile not found")) {
+    return "Your account no longer exists. Contact your admin.";
+  }
+  if (lower.includes("authenticated user does not match entered username")) {
+    return "Cloud identity mismatch. Sign in again with your current username.";
+  }
+
+  return msg || "Cloud account is no longer valid on this device. Sign in again while online.";
+}
+
 export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
   const { setCurrentUser, syncStatus } = usePOS();
 
@@ -479,6 +514,15 @@ export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
           try {
             cloudUser = await ensureOnlineSession(u, password);
           } catch (cloudErr: any) {
+            if (shouldInvalidateLocalUserAfterCloudFailure(cloudErr)) {
+              try {
+                await deleteLocalUser(u);
+              } catch {
+                // ignore
+              }
+              throw new Error(friendlyCloudAccountFailure(cloudErr));
+            }
+
             if (import.meta.env.DEV) {
               console.warn("[Auth] Local login without cloud session", cloudErr);
             }

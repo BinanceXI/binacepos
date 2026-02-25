@@ -5,6 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/verify-backend-env.mjs",
+    "verify:backend-env": "node scripts/verify-backend-env.mjs",
+    "verify:tenant-scope": "node scripts/verify-tenant-scope.mjs",
+    "supabase:introspect": "node scripts/supabase-introspect.mjs",
+    "supabase:compare-security": "node scripts/supabase-compare-security.mjs",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
