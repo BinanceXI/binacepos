@@ -20,7 +20,16 @@ import { usePOS } from "@/contexts/POSContext";
 import { BRAND } from "@/lib/brand";
 
 const navItems = [
-  { path: "/platform", label: "Admin", icon: Shield },
+  { path: "/platform/overview", label: "Overview", icon: Shield },
+  { path: "/platform/businesses", label: "Businesses", icon: LayoutDashboard },
+  { path: "/platform/users", label: "Users", icon: ShoppingCart },
+  { path: "/platform/devices", label: "Devices", icon: Package },
+  { path: "/platform/plans", label: "Plans & Pricing", icon: Wallet },
+  { path: "/platform/activation-requests", label: "Activation Requests", icon: Printer },
+  { path: "/platform/analytics", label: "Analytics", icon: PieChart },
+  { path: "/platform/support", label: "Support / Chats", icon: BarChart3 },
+  { path: "/platform/audit-logs", label: "Audit Logs", icon: Settings },
+  { path: "/platform/settings", label: "Settings", icon: Settings },
   { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { path: "/pos", label: "Point of Sale", icon: ShoppingCart },
   { path: "/inventory", label: "Inventory", icon: Package },
@@ -44,9 +53,9 @@ export const POSSidebar = () => {
   // ✅ Cashier sees ONLY POS
   const visibleItems = useMemo(() => {
     if (!currentUser) return [];
-    if (isPlatform) return navItems.filter((i) => i.path === "/platform");
+    if (isPlatform) return navItems.filter((i) => i.path.startsWith("/platform/"));
     if (isCashier) return navItems.filter((i) => i.path === "/pos");
-    if (isAdmin) return navItems.filter((i) => i.path !== "/platform");
+    if (isAdmin) return navItems.filter((i) => !i.path.startsWith("/platform/"));
     return navItems.filter((i) => i.path === "/pos");
   }, [currentUser, isAdmin, isCashier, isPlatform]);
 
@@ -143,6 +152,16 @@ export const POSSidebar = () => {
                         {item.label}
                       </div>
                       <div className="text-[11px] text-white/48 truncate">
+                        {item.path === "/platform/overview" ? "Stats & health" : ""}
+                        {item.path === "/platform/businesses" ? "Licenses & tenants" : ""}
+                        {item.path === "/platform/users" ? "Accounts & access" : ""}
+                        {item.path === "/platform/devices" ? "Device slots" : ""}
+                        {item.path === "/platform/plans" ? "Pricing control" : ""}
+                        {item.path === "/platform/activation-requests" ? "Payment approvals" : ""}
+                        {item.path === "/platform/analytics" ? "Revenue snapshot" : ""}
+                        {item.path === "/platform/support" ? "Support queue" : ""}
+                        {item.path === "/platform/audit-logs" ? "Admin actions" : ""}
+                        {item.path === "/platform/settings" ? "Trials & EcoCash" : ""}
                         {item.path === "/pos" ? "Sell & checkout" : ""}
                         {item.path === "/inventory" ? "Stock & products" : ""}
                         {item.path === "/reports" ? "Analytics & exports" : ""}

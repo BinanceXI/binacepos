@@ -11,16 +11,38 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { computeBusinessLicenseState, type BusinessLicenseState } from "@/lib/commercialization";
 
 type BillingRow = {
   business_id: string;
-  paid_through: string;
+  paid_through: string | null;
   grace_days: number;
   locked_override: boolean;
   currency: string;
+  trial_started_at: string | null;
+  trial_ends_at: string | null;
+  activated_at: string | null;
 };
 
-type AccessState = "active" | "grace" | "locked";
+type AccessState = BusinessLicenseState;
+
+type PlatformSettingsRow = {
+  trial_days: number;
+  payment_provider: string;
+  payment_instructions: string;
+  ecocash_number: string | null;
+  ecocash_name: string | null;
+  support_contact: string | null;
+};
+
+type ActivationRequestRow = {
+  id: string;
+  status: "pending" | "approved" | "rejected" | "cancelled" | string;
+  created_at: string;
+  reviewed_at: string | null;
+  admin_note: string | null;
+};
 
 type BillingCache = {
   billing: BillingRow | null;
@@ -64,18 +86,12 @@ function saveBillingCache(businessId: string, cache: BillingCache) {
   }
 }
 
-function computeState(b: BillingRow | null, businessStatus: string | null, nowMs: number): AccessState {
-  if (!b) return "locked";
-  if (businessStatus === "suspended") return "locked";
-  if (b.locked_override) return "locked";
-
-  const paid = new Date(b.paid_through);
-  if (Number.isNaN(paid.getTime())) return "locked";
-
-  if (nowMs <= paid.getTime()) return "active";
-  const graceEnd = paid.getTime() + (Number(b.grace_days || 0) || 0) * 24 * 60 * 60 * 1000;
-  if (nowMs <= graceEnd) return "grace";
-  return "locked";
+function computeState(
+  b: BillingRow | null,
+  businessStatus: string | null,
+  nowMs: number
+): AccessState {
+  return computeBusinessLicenseState(businessStatus, b || null, nowMs);
 }
 
 export function SubscriptionGate({ children }: { children: React.ReactNode }) {
@@ -86,8 +102,11 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
   const businessId = String((currentUser as any)?.business_id || "").trim() || null;
   const offline = typeof navigator !== "undefined" && navigator.onLine === false;
 
-  const [code, setCode] = useState("");
-  const [redeeming, setRedeeming] = useState(false);
+  const [payerName, setPayerName] = useState("");
+  const [payerPhone, setPayerPhone] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [requestMessage, setRequestMessage] = useState("");
+  const [requestingActivation, setRequestingActivation] = useState(false);
   const [clockTick, setClockTick] = useState(0);
   const [forcingDemoExpiry, setForcingDemoExpiry] = useState(false);
 
@@ -109,7 +128,9 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
         const [{ data: billing, error: billErr }, { data: biz, error: bizErr }] = await Promise.all([
           supabase
             .from("business_billing")
-            .select("business_id, paid_through, grace_days, locked_override, currency")
+            .select(
+              "business_id, paid_through, grace_days, locked_override, currency, trial_started_at, trial_ends_at, activated_at"
+            )
             .eq("business_id", businessId)
             .maybeSingle(),
           supabase.from("businesses").select("id, status").eq("id", businessId).maybeSingle(),
@@ -139,6 +160,51 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
     staleTime: 10_000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
+  });
+
+  const { data: platformSettings } = useQuery({
+    queryKey: ["platformSettings", "billingGate"],
+    queryFn: async () => {
+      try {
+        const { data, error } = await supabase
+          .from("platform_settings")
+          .select(
+            "trial_days, payment_provider, payment_instructions, ecocash_number, ecocash_name, support_contact"
+          )
+          .eq("id", true)
+          .maybeSingle();
+        if (error) throw error;
+        return (data as any) as PlatformSettingsRow | null;
+      } catch {
+        return null;
+      }
+    },
+    enabled: !!currentUser && role !== "platform_admin",
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const { data: latestActivationRequest, refetch: refetchActivationRequest } = useQuery({
+    queryKey: ["activationRequests", "latest", businessId],
+    queryFn: async () => {
+      if (!businessId) return null as ActivationRequestRow | null;
+      try {
+        const { data, error } = await supabase
+          .from("activation_requests")
+          .select("id, status, created_at, reviewed_at, admin_note")
+          .eq("business_id", businessId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (error) throw error;
+        return (data as any) as ActivationRequestRow | null;
+      } catch {
+        return null;
+      }
+    },
+    enabled: !!businessId && role !== "platform_admin",
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
   });
 
   // Note: `clockTick` exists only to force periodic re-renders so time-based locking applies even
@@ -273,6 +339,16 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         )}
+        {state === "trial" && (
+          <div className="p-3 md:p-4">
+            <div className="rounded-xl border border-blue-500/25 bg-blue-500/10 px-3 py-2 text-sm flex items-center justify-between gap-2">
+              <div>
+                <span className="font-semibold">Trial active:</span> you are in the free trial period.
+              </div>
+              <Badge variant="outline">trial</Badge>
+            </div>
+          </div>
+        )}
         {state === "grace" && (
           <div className="p-3 md:p-4">
             <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm flex items-center justify-between gap-2">
@@ -289,26 +365,49 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
   }
 
   const paidThrough = data?.billing?.paid_through ? new Date(data.billing.paid_through) : null;
+  const trialEndsAt = data?.billing?.trial_ends_at ? new Date(data.billing.trial_ends_at) : null;
+  const paymentProvider =
+    String(platformSettings?.payment_provider || "").trim() || "EcoCash";
+  const paymentInstructions =
+    String(platformSettings?.payment_instructions || "").trim() ||
+    `Pay via ${paymentProvider} and tap "I Have Paid" to send an activation request for review.`;
 
-  const redeem = async () => {
-    if (offline) return toast.error("Connect to the internet to activate");
-    const c = String(code || "").trim();
-    if (!c) return toast.error("Enter a reactivation code");
+  const submitActivationRequest = async () => {
+    if (offline) return toast.error("Connect to the internet to send activation request");
+    if (!businessId) return toast.error("Missing business");
+    if (latestActivationRequest?.status === "pending") {
+      return toast.error("An activation request is already pending review");
+    }
 
-    setRedeeming(true);
+    setRequestingActivation(true);
     try {
-      const { data: out, error: rpcErr } = await supabase.rpc("redeem_reactivation_code", { p_code: c });
-      if (rpcErr) throw rpcErr;
+      const { error } = await supabase.from("activation_requests").insert({
+        business_id: businessId,
+        payment_method: "ecocash",
+        payer_name: String(payerName || "").trim() || null,
+        payer_phone: String(payerPhone || "").trim() || null,
+        payment_reference: String(paymentReference || "").trim() || null,
+        message: String(requestMessage || "").trim() || null,
+        months_requested: 1,
+      } as any);
+      if (error) throw error;
 
-      setCode("");
-      toast.success("Reactivated");
+      toast.success("Activation request sent. Admin will review after payment verification.");
+      setPayerName("");
+      setPayerPhone("");
+      setPaymentReference("");
+      setRequestMessage("");
+      await refetchActivationRequest();
       await qc.invalidateQueries({ queryKey: ["billing", businessId] });
-      await qc.invalidateQueries(); // best-effort: refresh everything
-      return out;
     } catch (e: any) {
-      toast.error(e?.message || "Invalid code");
+      const msg = String(e?.message || "");
+      if (msg.toLowerCase().includes("duplicate key")) {
+        toast.error("A pending activation request already exists for this business.");
+      } else {
+        toast.error(msg || "Failed to send activation request");
+      }
     } finally {
-      setRedeeming(false);
+      setRequestingActivation(false);
     }
   };
 
@@ -316,35 +415,135 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
     <div className="min-h-[70vh] flex items-center justify-center p-6">
       <Card className="max-w-lg w-full shadow-card">
         <CardHeader>
-          <CardTitle>Subscription Locked</CardTitle>
+          <CardTitle>Activation Required</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="text-sm text-muted-foreground">
-            {BRAND.name} is locked for this business. Contact BinanceXI POS admin for a reactivation code.
+            {BRAND.name} is locked for this business. Pay using the instructions below, then send an activation request.
           </div>
+
+          {trialEndsAt && !Number.isNaN(trialEndsAt.getTime()) && (
+            <div className="text-xs text-muted-foreground">
+              Trial ended: {trialEndsAt.toLocaleDateString()}
+            </div>
+          )}
 
           {paidThrough && !Number.isNaN(paidThrough.getTime()) && (
             <div className="text-xs text-muted-foreground">
-              Paid through: {paidThrough.toLocaleDateString()}
+              Last paid through: {paidThrough.toLocaleDateString()}
             </div>
           )}
 
           {offline && (
             <div className="text-xs text-amber-600">
-              You are offline. Connect to the internet to activate with a code.
+              You are offline. Connect to the internet to send an activation request.
             </div>
           )}
 
+          <div className="rounded-xl border border-border bg-card/50 px-3 py-3 space-y-2">
+            <div className="text-sm font-semibold">{paymentProvider} Payment Instructions</div>
+            {platformSettings?.ecocash_number ? (
+              <div className="text-sm">
+                Number: <span className="font-semibold">{platformSettings.ecocash_number}</span>
+              </div>
+            ) : null}
+            {platformSettings?.ecocash_name ? (
+              <div className="text-sm">
+                Name: <span className="font-semibold">{platformSettings.ecocash_name}</span>
+              </div>
+            ) : null}
+            <div className="text-sm text-muted-foreground whitespace-pre-wrap">
+              {paymentInstructions}
+            </div>
+            {platformSettings?.support_contact ? (
+              <div className="text-xs text-muted-foreground">
+                Support: {platformSettings.support_contact}
+              </div>
+            ) : null}
+          </div>
+
+          {latestActivationRequest ? (
+            <div className="rounded-xl border border-border bg-card/50 px-3 py-3 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold">Latest Request</div>
+                <Badge
+                  variant={
+                    latestActivationRequest.status === "approved"
+                      ? "secondary"
+                      : latestActivationRequest.status === "pending"
+                        ? "outline"
+                        : "destructive"
+                  }
+                >
+                  {latestActivationRequest.status}
+                </Badge>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Sent: {new Date(latestActivationRequest.created_at).toLocaleString()}
+              </div>
+              {latestActivationRequest.admin_note ? (
+                <div className="text-xs text-muted-foreground whitespace-pre-wrap">
+                  Admin note: {latestActivationRequest.admin_note}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="space-y-2">
-            <Label>Reactivation code</Label>
-            <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="XXXX-XXXX..." autoCapitalize="characters" />
+            <Label>Payer name (optional)</Label>
+            <Input
+              value={payerName}
+              onChange={(e) => setPayerName(e.target.value)}
+              placeholder="Tendai Nashe"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div className="space-y-2">
+              <Label>EcoCash number (optional)</Label>
+              <Input
+                value={payerPhone}
+                onChange={(e) => setPayerPhone(e.target.value)}
+                placeholder="0772..."
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Payment reference (optional)</Label>
+              <Input
+                value={paymentReference}
+                onChange={(e) => setPaymentReference(e.target.value)}
+                placeholder="EcoCash ref"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Message (optional)</Label>
+            <Textarea
+              value={requestMessage}
+              onChange={(e) => setRequestMessage(e.target.value)}
+              placeholder="I paid and need activation for this business."
+              rows={3}
+            />
           </div>
 
           <div className="flex gap-2">
-            <Button className="flex-1" onClick={redeem} disabled={redeeming}>
-              {redeeming ? "Activating..." : "Activate"}
+            <Button
+              className="flex-1"
+              onClick={submitActivationRequest}
+              disabled={requestingActivation || latestActivationRequest?.status === "pending"}
+            >
+              {requestingActivation ? "Sending..." : "I Have Paid"}
             </Button>
-            <Button className="flex-1" variant="outline" onClick={() => refetch()} disabled={redeeming}>
+            <Button
+              className="flex-1"
+              variant="outline"
+              onClick={() => {
+                void refetch();
+                void refetchActivationRequest();
+              }}
+              disabled={requestingActivation}
+            >
               Refresh
             </Button>
           </div>

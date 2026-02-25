@@ -24,7 +24,16 @@ import { ReceiptsPage } from "./pages/ReceiptsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ProfitAnalysisPage } from "./pages/ProfitAnalysisPage";
 import { ExpensesPage } from "./pages/ExpensesPage";
-import { PlatformAdminPage } from "./pages/PlatformAdminPage";
+import PlatformOverviewPage from "./pages/platform/PlatformOverviewPage";
+import PlatformBusinessesPage from "./pages/platform/PlatformBusinessesPage";
+import PlatformUsersPage from "./pages/platform/PlatformUsersPage";
+import PlatformDevicesPage from "./pages/platform/PlatformDevicesPage";
+import PlatformPlansPricingPage from "./pages/platform/PlatformPlansPricingPage";
+import PlatformActivationRequestsPage from "./pages/platform/PlatformActivationRequestsPage";
+import PlatformAnalyticsPage from "./pages/platform/PlatformAnalyticsPage";
+import PlatformSupportPage from "./pages/platform/PlatformSupportPage";
+import PlatformAuditLogsPage from "./pages/platform/PlatformAuditLogsPage";
+import PlatformAdminSettingsPage from "./pages/platform/PlatformAdminSettingsPage";
 import NotFound from "./pages/NotFound";
 import { EXPECTED_SUPABASE_REFS, getBackendInfo } from "@/lib/backendInfo";
 
@@ -59,18 +68,109 @@ const AppRoutes = () => {
         <Route path="*" element={<LoginScreen onLogin={() => {}} />} />
       ) : role === "platform_admin" ? (
         <>
-          <Route path="/" element={<Navigate to="/platform" replace />} />
+          <Route path="/" element={<Navigate to="/platform/overview" replace />} />
+          <Route path="/platform" element={<Navigate to="/platform/overview" replace />} />
           <Route
-            path="/platform"
+            path="/platform/overview"
             element={
               <CloudSessionGate>
                 <MainLayout>
-                  <PlatformAdminPage />
+                  <PlatformOverviewPage />
                 </MainLayout>
               </CloudSessionGate>
             }
           />
-          <Route path="*" element={<Navigate to="/platform" replace />} />
+          <Route
+            path="/platform/businesses"
+            element={
+              <CloudSessionGate>
+                <MainLayout>
+                  <PlatformBusinessesPage />
+                </MainLayout>
+              </CloudSessionGate>
+            }
+          />
+          <Route
+            path="/platform/users"
+            element={
+              <CloudSessionGate>
+                <MainLayout>
+                  <PlatformUsersPage />
+                </MainLayout>
+              </CloudSessionGate>
+            }
+          />
+          <Route
+            path="/platform/devices"
+            element={
+              <CloudSessionGate>
+                <MainLayout>
+                  <PlatformDevicesPage />
+                </MainLayout>
+              </CloudSessionGate>
+            }
+          />
+          <Route
+            path="/platform/plans"
+            element={
+              <CloudSessionGate>
+                <MainLayout>
+                  <PlatformPlansPricingPage />
+                </MainLayout>
+              </CloudSessionGate>
+            }
+          />
+          <Route
+            path="/platform/activation-requests"
+            element={
+              <CloudSessionGate>
+                <MainLayout>
+                  <PlatformActivationRequestsPage />
+                </MainLayout>
+              </CloudSessionGate>
+            }
+          />
+          <Route
+            path="/platform/analytics"
+            element={
+              <CloudSessionGate>
+                <MainLayout>
+                  <PlatformAnalyticsPage />
+                </MainLayout>
+              </CloudSessionGate>
+            }
+          />
+          <Route
+            path="/platform/support"
+            element={
+              <CloudSessionGate>
+                <MainLayout>
+                  <PlatformSupportPage />
+                </MainLayout>
+              </CloudSessionGate>
+            }
+          />
+          <Route
+            path="/platform/audit-logs"
+            element={
+              <CloudSessionGate>
+                <MainLayout>
+                  <PlatformAuditLogsPage />
+                </MainLayout>
+              </CloudSessionGate>
+            }
+          />
+          <Route
+            path="/platform/settings"
+            element={
+              <CloudSessionGate>
+                <MainLayout>
+                  <PlatformAdminSettingsPage />
+                </MainLayout>
+              </CloudSessionGate>
+            }
+          />
+          <Route path="*" element={<Navigate to="/platform/overview" replace />} />
         </>
       ) : (
         <>

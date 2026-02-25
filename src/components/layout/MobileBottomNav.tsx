@@ -19,7 +19,21 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/u
 
 type NavItem = { path: string; label: string; icon: any; badge?: boolean };
 
-const PLATFORM_ITEMS: NavItem[] = [{ path: "/platform", label: "Admin", icon: Shield }];
+const PLATFORM_PRIMARY_ITEMS: NavItem[] = [
+  { path: "/platform/overview", label: "Home", icon: Shield },
+  { path: "/platform/businesses", label: "Biz", icon: LayoutDashboard },
+  { path: "/platform/activation-requests", label: "Requests", icon: Wallet },
+  { path: "/platform/support", label: "Support", icon: MoreHorizontal },
+];
+
+const PLATFORM_MORE_ITEMS: NavItem[] = [
+  { path: "/platform/users", label: "Users", icon: Settings },
+  { path: "/platform/devices", label: "Devices", icon: Package },
+  { path: "/platform/plans", label: "Plans", icon: Wallet },
+  { path: "/platform/analytics", label: "Analytics", icon: BarChart3 },
+  { path: "/platform/audit-logs", label: "Audit", icon: Shield },
+  { path: "/platform/settings", label: "Settings", icon: Settings },
+];
 const CASHIER_ITEMS: NavItem[] = [{ path: "/pos", label: "POS", icon: ShoppingCart, badge: true }];
 
 // Mobile bottom nav must stay compact; extra admin pages live under "More".
@@ -51,14 +65,14 @@ export const MobileBottomNav = () => {
   if (!currentUser) return null;
 
   const primaryItems: NavItem[] = isPlatform
-    ? PLATFORM_ITEMS
+    ? PLATFORM_PRIMARY_ITEMS
     : isCashier
     ? CASHIER_ITEMS
     : isAdmin
     ? ADMIN_PRIMARY_ITEMS
     : CASHIER_ITEMS;
 
-  const moreItems: NavItem[] = isAdmin ? ADMIN_MORE_ITEMS : [];
+  const moreItems: NavItem[] = isPlatform ? PLATFORM_MORE_ITEMS : isAdmin ? ADMIN_MORE_ITEMS : [];
   const isMoreActive = moreItems.some((i) => location.pathname === i.path);
 
   return (
