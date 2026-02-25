@@ -52,6 +52,24 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Ensure Android platform exists
+        shell: bash
+        run: |
+          if [ -d android/app ]; then
+            echo "Android platform already present."
+          else
+            npx cap add android
+          fi
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+
       - name: Configure Android SDK path
         shell: bash
         run: |
@@ -62,9 +80,6 @@ jobs:
           fi
           echo "sdk.dir=$SDK" > android/local.properties
           chmod +x android/gradlew
-
-      - name: Ensure Android platform exists
-        run: npx cap add android || echo "Android already added"
 
       - name: Sync Capacitor Android
         run: npx cap sync android
