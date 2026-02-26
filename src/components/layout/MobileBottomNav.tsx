@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { usePOS } from "@/contexts/POSContext";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import { isPlatformLikeRole } from "@/lib/roles";
 
 type NavItem = { path: string; label: string; icon: any; badge?: boolean };
 
@@ -56,7 +57,7 @@ export const MobileBottomNav = () => {
   const { currentUser, cart } = usePOS();
 
   const role = (currentUser as any)?.role;
-  const isPlatform = role === "platform_admin";
+  const isPlatform = isPlatformLikeRole(role);
   const isCashier = role === "cashier";
   const isAdmin = role === "admin";
 

@@ -33,6 +33,7 @@ import { FeedbackDialog } from "@/components/feedback/FeedbackDialog";
 import { flushFeedbackQueue, getQueuedFeedbackCount } from "@/lib/feedbackQueue";
 import { demoEntryPath, isDemoEntry } from "@/lib/demoEntry";
 import { clearClientIndexedDb, clearClientStorage } from "@/lib/sessionCleanup";
+import { isPlatformLikeRole } from "@/lib/roles";
 
 type PlatformAdminSessionBackup = {
   access_token: string;
@@ -88,7 +89,7 @@ export const TopBar = () => {
       platformBackup?.access_token &&
       platformBackup?.refresh_token &&
       currentUser &&
-      (currentUser as any)?.role !== "platform_admin"
+      !isPlatformLikeRole((currentUser as any)?.role)
   );
   const [returning, setReturning] = useState(false);
 
@@ -232,7 +233,7 @@ export const TopBar = () => {
       if (pErr || !profile) throw pErr || new Error("Failed to load profile");
 
       if ((profile as any)?.active === false) throw new Error("Account disabled");
-      if (String((profile as any)?.role || "") !== "platform_admin") {
+      if (!isPlatformLikeRole((profile as any)?.role)) {
         throw new Error("Restored session is not platform admin");
       }
 

@@ -36,6 +36,7 @@ import PlatformAuditLogsPage from "./pages/platform/PlatformAuditLogsPage";
 import PlatformAdminSettingsPage from "./pages/platform/PlatformAdminSettingsPage";
 import NotFound from "./pages/NotFound";
 import { EXPECTED_SUPABASE_REFS, getBackendInfo } from "@/lib/backendInfo";
+import { isPlatformLikeRole } from "@/lib/roles";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -57,6 +58,7 @@ const persister = createSyncStoragePersister({
 const AppRoutes = () => {
   const { currentUser } = usePOS();
   const role = (currentUser as any)?.role;
+  const isPlatformAdmin = isPlatformLikeRole(role);
 
   return (
     <Routes>
@@ -66,7 +68,7 @@ const AppRoutes = () => {
       {/* ✅ Auth gate */}
       {!currentUser ? (
         <Route path="*" element={<LoginScreen onLogin={() => {}} />} />
-      ) : role === "platform_admin" ? (
+      ) : isPlatformAdmin ? (
         <>
           <Route path="/" element={<Navigate to="/platform/overview" replace />} />
           <Route path="/platform" element={<Navigate to="/platform/overview" replace />} />

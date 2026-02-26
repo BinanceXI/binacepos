@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import { usePOS } from "@/contexts/POSContext";
 import { BRAND } from "@/lib/brand";
+import { isPlatformLikeRole } from "@/lib/roles";
 
 const navItems = [
   { path: "/platform/overview", label: "Overview", icon: Shield },
@@ -46,7 +47,7 @@ export const POSSidebar = () => {
   const { currentUser } = usePOS();
 
   const role = (currentUser as any)?.role;
-  const isPlatform = role === "platform_admin";
+  const isPlatform = isPlatformLikeRole(role);
   const isAdmin = role === "admin";
   const isCashier = role === "cashier";
 

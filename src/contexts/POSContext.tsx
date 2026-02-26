@@ -13,6 +13,7 @@ import type { CartItem, Product, SyncStatus, Sale, POSMode, Discount } from "@/t
 import { supabase } from "@/lib/supabase";
 import { ensureSupabaseSession } from "@/lib/supabaseSession";
 import { readScopedJSON, resolveTenantScope, tenantScopeKey, writeScopedJSON } from "@/lib/tenantScope";
+import { isAdminLikeRole } from "@/lib/roles";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { getExpenseQueueCount, syncExpenses } from "@/lib/expenses";
@@ -349,7 +350,7 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
 
   const can = (permission: keyof UserPermissions) => {
     if (!currentUser) return false;
-    if (currentUser.role === "platform_admin" || currentUser.role === "admin") return true;
+    if (isAdminLikeRole(currentUser.role)) return true;
     return !!currentUser.permissions?.[permission];
   };
 
