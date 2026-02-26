@@ -53,6 +53,7 @@ type BillingCache = {
 const BILLING_CACHE_PREFIX = "binancexi_billing_cache_v1:";
 const DEMO_EXPIRES_KEY = "binancexi_demo_expires_at";
 const ACTIVATION_BYPASS_ROLES = new Set(["platform_admin", "master_admin", "super_admin"]);
+const TEMP_DISABLE_ACTIVATION_LOCK = true;
 
 function normalizeRole(role: unknown) {
   return String(role || "").trim().toLowerCase();
@@ -284,6 +285,8 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
   const gateDecision =
     bypassActivationGate
       ? "bypass_admin_role"
+      : TEMP_DISABLE_ACTIVATION_LOCK && state === "locked"
+        ? "allow_locked_temp_bypass"
       : !roleResolved
         ? "wait_role_resolution"
         : demoExpired || forcingDemoExpiry
@@ -396,10 +399,20 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (state !== "locked") {
+  if (state !== "locked" || TEMP_DISABLE_ACTIVATION_LOCK) {
     // Optional grace banner
     return (
       <div className="space-y-4">
+        {state === "locked" && TEMP_DISABLE_ACTIVATION_LOCK && (
+          <div className="p-3 md:p-4">
+            <div className="rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm flex items-center justify-between gap-2">
+              <div>
+                <span className="font-semibold">Activation lock bypassed:</span> access is temporarily allowed.
+              </div>
+              <Badge variant="outline">billing lock bypass</Badge>
+            </div>
+          </div>
+        )}
         {offline && (
           <div className="p-3 md:p-4">
             <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm">
