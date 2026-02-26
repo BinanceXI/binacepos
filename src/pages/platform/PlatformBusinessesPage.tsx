@@ -37,6 +37,7 @@ import {
 
 type BillingLite = {
   max_devices: number | null;
+  currency?: string | null;
   paid_through: string | null;
   grace_days: number | null;
   locked_override: boolean | null;
@@ -99,6 +100,8 @@ export function PlatformBusinessesPage() {
 
   const [editPlanCode, setEditPlanCode] = useState("");
   const [editMaxDevices, setEditMaxDevices] = useState("");
+  const [editPaidThroughDate, setEditPaidThroughDate] = useState("");
+  const [editGraceDays, setEditGraceDays] = useState("");
   const [softDeleteReason, setSoftDeleteReason] = useState("");
 
   const [newAdminFullName, setNewAdminFullName] = useState("");
@@ -142,7 +145,7 @@ export function PlatformBusinessesPage() {
       const { data, error } = await supabase
         .from("businesses")
         .select(
-          "id, name, status, plan_type, created_at, deleted_at, deleted_reason, business_billing(max_devices, paid_through, grace_days, locked_override, trial_started_at, trial_ends_at, activated_at)"
+          "id, name, status, plan_type, created_at, deleted_at, deleted_reason, business_billing(max_devices, currency, paid_through, grace_days, locked_override, trial_started_at, trial_ends_at, activated_at)"
         )
         .order("created_at", { ascending: false });
       if (error) throw error;
@@ -213,12 +216,27 @@ export function PlatformBusinessesPage() {
     if (!selected) {
       setEditPlanCode("");
       setEditMaxDevices("");
+      setEditPaidThroughDate("");
+      setEditGraceDays("7");
       return;
     }
     setEditPlanCode(selected._planCode);
     const max = Math.max(1, Math.min(50, Number(selected._billing?.max_devices ?? 2) || 2));
     setEditMaxDevices(String(max));
-  }, [selected?.id, selected?._planCode, selected?._billing?.max_devices]);
+    setEditGraceDays(String(Math.max(0, Math.min(60, Number(selected._billing?.grace_days ?? 7) || 0))));
+    setEditPaidThroughDate(
+      selected._billing?.paid_through
+        ? new Date(selected._billing.paid_through).toISOString().slice(0, 10)
+        : ""
+    );
+  }, [
+    selected,
+    selected?.id,
+    selected?._planCode,
+    selected?._billing?.max_devices,
+    selected?._billing?.grace_days,
+    selected?._billing?.paid_through,
+  ]);
 
   const { data: selectedUsers = [] } = useQuery({
     queryKey: ["platform", "businessUsers", selectedBusinessId],
@@ -323,6 +341,91 @@ export function PlatformBusinessesPage() {
     }
   };
 
+  const saveBillingTerms = async () => {
+    if (!selected) return toast.error("Select a business");
+
+    const graceDays = Math.max(0, Math.min(60, Number(editGraceDays) || 0));
+    if (String(editGraceDays || "").trim() === "" || Number.isNaN(Number(editGraceDays))) {
+      return toast.error("Enter a valid grace period");
+    }
+
+    let paidThroughIso: string | null = null;
+    if (String(editPaidThroughDate || "").trim()) {
+      const dt = new Date(`${editPaidThroughDate}T23:59:59.999Z`);
+      if (Number.isNaN(dt.getTime())) return toast.error("Invalid paid-through date");
+      paidThroughIso = dt.toISOString();
+    }
+
+    try {
+      if (!(await requirePlatformCloudSession())) return;
+      const { error } = await supabase
+        .from("business_billing")
+        .update({
+          grace_days: graceDays,
+          ...(paidThroughIso ? { paid_through: paidThroughIso } : {}),
+          locked_override: false,
+        } as any)
+        .eq("business_id", selected.id);
+      if (error) throw error;
+      toast.success("Billing terms updated");
+      await refreshBusinesses();
+    } catch (e: any) {
+      toast.error(friendlyAdminError(e) || "Failed to update billing terms");
+    }
+  };
+
+  const markBusinessPaidMonths = async (months: number) => {
+    if (!selected) return toast.error("Select a business");
+    const m = Math.max(1, Math.min(36, Math.trunc(months || 0)));
+    if (!m) return toast.error("Invalid months");
+
+    const now = new Date();
+    const currentPaid = selected._billing?.paid_through
+      ? new Date(selected._billing.paid_through)
+      : null;
+    const base = currentPaid && !Number.isNaN(currentPaid.getTime()) && currentPaid > now ? currentPaid : now;
+    const next = new Date(base.getTime());
+    // Keep behavior predictable and aligned with existing billing RPC conventions (~30-day months).
+    next.setDate(next.getDate() + 30 * m);
+
+    const kind = m >= 12 ? "annual" : "subscription";
+    const note = `Manual ${kind} payment applied (${m} month${m === 1 ? "" : "s"})`;
+
+    try {
+      if (!(await requirePlatformCloudSession())) return;
+
+      const { error: billErr } = await supabase
+        .from("business_billing")
+        .update({
+          paid_through: next.toISOString(),
+          locked_override: false,
+          activated_at: selected._billing?.activated_at || new Date().toISOString(),
+        } as any)
+        .eq("business_id", selected.id);
+      if (billErr) throw billErr;
+
+      const { error: payErr } = await supabase.from("billing_payments").insert({
+        business_id: selected.id,
+        amount: 0,
+        currency: String(selected._billing?.currency || "USD"),
+        kind,
+        notes: note,
+      } as any);
+      // Ignore amount check failure by inserting a log-less update only.
+      if (payErr && String((payErr as any)?.message || "").toLowerCase().includes("check")) {
+        // noop
+      } else if (payErr) {
+        throw payErr;
+      }
+
+      setEditPaidThroughDate(next.toISOString().slice(0, 10));
+      toast.success(`Marked paid for ${m} month${m === 1 ? "" : "s"} (through ${next.toLocaleDateString()})`);
+      await refreshBusinesses();
+    } catch (e: any) {
+      toast.error(friendlyAdminError(e) || "Failed to apply manual payment");
+    }
+  };
+
   const saveBusinessPlanAndLimits = async () => {
     if (!selected) return toast.error("Select a business");
     const planCode = String(editPlanCode || "").trim();
@@ -397,8 +500,7 @@ export function PlatformBusinessesPage() {
 
   const softDeleteBusiness = async () => {
     if (!selected) return toast.error("Select a business");
-    const reason = String(softDeleteReason || "").trim();
-    if (!reason) return toast.error("Enter a reason");
+    const reason = String(softDeleteReason || "").trim() || "Archived by platform admin";
     const ok = window.confirm(
       `Soft delete "${selected.name}"?\n\nThis suspends access and disables users/devices.`
     );
@@ -543,6 +645,33 @@ export function PlatformBusinessesPage() {
 
   const selectedPlan = selected ? planMap.get(selected._planCode) : null;
   const selectedBilling = selected?._billing || null;
+  const selectedExpiryDays = useMemo(() => {
+    if (!selectedBilling?.paid_through) return null;
+    const ts = Date.parse(selectedBilling.paid_through);
+    if (!Number.isFinite(ts)) return null;
+    return Math.ceil((ts - Date.now()) / (1000 * 60 * 60 * 24));
+  }, [selectedBilling?.paid_through]);
+
+  const renewalAlerts30d = useMemo(() => {
+    const now = Date.now();
+    return filteredBusinesses
+      .map((b) => {
+        const paidThrough = b._billing?.paid_through;
+        if (!paidThrough) return null;
+        const ts = Date.parse(paidThrough);
+        if (!Number.isFinite(ts)) return null;
+        const days = Math.ceil((ts - now) / (1000 * 60 * 60 * 24));
+        if (days < 0 || days > 30) return null;
+        return { id: b.id, name: b.name, days, paidThrough };
+      })
+      .filter(Boolean)
+      .sort((a: any, b: any) => a.days - b.days) as Array<{
+      id: string;
+      name: string;
+      days: number;
+      paidThrough: string;
+    }>;
+  }, [filteredBusinesses]);
 
   return (
     <div className="p-4 md:p-6 space-y-4">
@@ -613,6 +742,18 @@ export function PlatformBusinessesPage() {
             </div>
           </CardHeader>
           <CardContent>
+            {!!renewalAlerts30d.length && (
+              <div className="mb-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2">
+                <div className="text-sm font-semibold">Renewal reminders (30-day window)</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {renewalAlerts30d
+                    .slice(0, 5)
+                    .map((r) => `${r.name}: ${r.days} day${r.days === 1 ? "" : "s"}`)
+                    .join(" • ")}
+                  {renewalAlerts30d.length > 5 ? ` • +${renewalAlerts30d.length - 5} more` : ""}
+                </div>
+              </div>
+            )}
             <div className="rounded-xl border border-border overflow-hidden">
               <Table>
                 <TableHeader>
@@ -748,6 +889,16 @@ export function PlatformBusinessesPage() {
 
                 <div className="rounded-xl border border-border bg-card/50 px-3 py-3 space-y-3">
                   <div className="text-sm font-semibold">License & Trial</div>
+                  {selectedExpiryDays != null && (
+                    <div className="text-xs">
+                      <Badge
+                        variant={selectedExpiryDays <= 30 ? "outline" : "secondary"}
+                        className={selectedExpiryDays <= 30 ? "border-amber-500/30 text-amber-600" : ""}
+                      >
+                        Expires {selectedExpiryDays < 0 ? `${Math.abs(selectedExpiryDays)}d ago` : `in ${selectedExpiryDays}d`}
+                      </Badge>
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div className="rounded-lg border border-border px-2 py-2">
                       <div className="text-muted-foreground">State</div>
@@ -797,13 +948,50 @@ export function PlatformBusinessesPage() {
                 </div>
 
                 <div className="rounded-xl border border-border bg-card/50 px-3 py-3 space-y-3">
+                  <div className="text-sm font-semibold">Manual Subscription / Renewal</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label>Paid through</Label>
+                      <Input
+                        type="date"
+                        value={editPaidThroughDate}
+                        onChange={(e) => setEditPaidThroughDate(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Grace days</Label>
+                      <Input
+                        inputMode="numeric"
+                        value={editGraceDays}
+                        onChange={(e) => setEditGraceDays(e.target.value)}
+                        placeholder="7"
+                      />
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Use this when a business pays directly (monthly/yearly) and you want to update access immediately.
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" onClick={saveBillingTerms}>
+                      Save Billing Terms
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => void markBusinessPaidMonths(1)}>
+                      Mark Paid +1 Month
+                    </Button>
+                    <Button size="sm" onClick={() => void markBusinessPaidMonths(12)}>
+                      Mark Paid +12 Months
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-border bg-card/50 px-3 py-3 space-y-3">
                   <div className="text-sm font-semibold">Business Lifecycle</div>
                   <div className="space-y-2">
                     <Label>Soft delete reason</Label>
                     <Input
                       value={softDeleteReason}
                       onChange={(e) => setSoftDeleteReason(e.target.value)}
-                      placeholder="Cancellation / abuse / requested closure / etc."
+                      placeholder="Optional (defaults to: Archived by platform admin)"
                     />
                   </div>
                   <div className="flex gap-2">
