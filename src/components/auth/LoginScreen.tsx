@@ -196,8 +196,8 @@ export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
   }, [demoOpen, turnstileSiteKey]);
 
   const enforceDeviceLicense = async (profile: any) => {
-    const role = String(profile?.role || "").trim();
-    if (role === "platform_admin") return;
+    const role = String(profile?.role || "").trim().toLowerCase();
+    if (["platform_admin", "master_admin", "super_admin"].includes(role)) return;
 
     const businessId = String(profile?.business_id || "").trim();
     if (!businessId) return; // SubscriptionGate will show a clearer message.
@@ -503,7 +503,9 @@ export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
 
       if (localUser) {
         let cloudUser: Awaited<ReturnType<typeof ensureOnlineSession>> | null = null;
-        const isPlatformAdmin = String((localUser as any)?.role || "") === "platform_admin";
+        const isPlatformAdmin = ["platform_admin", "master_admin", "super_admin"].includes(
+          String((localUser as any)?.role || "").trim().toLowerCase()
+        );
         if (isPlatformAdmin) {
           if (!navigator.onLine) {
             throw new Error("Platform admin requires an internet connection. Connect and sign in again.");

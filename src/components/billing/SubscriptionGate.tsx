@@ -52,6 +52,15 @@ type BillingCache = {
 
 const BILLING_CACHE_PREFIX = "binancexi_billing_cache_v1:";
 const DEMO_EXPIRES_KEY = "binancexi_demo_expires_at";
+const ACTIVATION_BYPASS_ROLES = new Set(["platform_admin", "master_admin", "super_admin"]);
+
+function normalizeRole(role: unknown) {
+  return String(role || "").trim().toLowerCase();
+}
+
+function isActivationBypassRole(role: unknown) {
+  return ACTIVATION_BYPASS_ROLES.has(normalizeRole(role));
+}
 
 function getBillingCacheKey(businessId: string) {
   return `${BILLING_CACHE_PREFIX}${businessId}`;
@@ -99,6 +108,9 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
   const { currentUser, setCurrentUser } = usePOS();
 
   const role = (currentUser as any)?.role;
+  const roleNormalized = normalizeRole(role);
+  const roleResolved = !currentUser || roleNormalized.length > 0;
+  const bypassActivationGate = isActivationBypassRole(role);
   const businessId = String((currentUser as any)?.business_id || "").trim() || null;
   const offline = typeof navigator !== "undefined" && navigator.onLine === false;
 
@@ -156,7 +168,7 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
         } satisfies BillingCache;
       }
     },
-    enabled: role !== "platform_admin" && !!currentUser,
+    enabled: !!currentUser && roleResolved && !bypassActivationGate,
     staleTime: 10_000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
@@ -179,7 +191,7 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
         return null;
       }
     },
-    enabled: !!currentUser && role !== "platform_admin",
+    enabled: !!currentUser && roleResolved && !bypassActivationGate,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
@@ -202,7 +214,7 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
         return null;
       }
     },
-    enabled: !!businessId && role !== "platform_admin",
+    enabled: !!businessId && roleResolved && !bypassActivationGate,
     staleTime: 10_000,
     refetchOnWindowFocus: false,
   });
@@ -226,7 +238,8 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!currentUser) return;
-    if (role === "platform_admin") return;
+    if (!roleResolved) return;
+    if (bypassActivationGate) return;
     if (!demoExpired) return;
     if (forcingDemoExpiry) return;
 
@@ -257,10 +270,65 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [currentUser?.id, role, demoExpired, forcingDemoExpiry, qc, setCurrentUser]);
+  }, [
+    currentUser,
+    currentUser?.id,
+    roleResolved,
+    bypassActivationGate,
+    demoExpired,
+    forcingDemoExpiry,
+    qc,
+    setCurrentUser,
+  ]);
+
+  const gateDecision =
+    bypassActivationGate
+      ? "bypass_admin_role"
+      : !roleResolved
+        ? "wait_role_resolution"
+        : demoExpired || forcingDemoExpiry
+          ? "demo_expired"
+          : !businessId
+            ? "missing_business_id"
+            : isFetching
+              ? "loading"
+              : error && !data?.billing
+                ? "error"
+                : state !== "locked"
+                  ? "allow"
+                  : "locked";
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    console.debug("[activation-gate]", {
+      role: roleNormalized || null,
+      businessId,
+      paidThrough: data?.billing?.paid_through ?? null,
+      lockedOverride: data?.billing?.locked_override ?? null,
+      businessStatus: data?.businessStatus ?? null,
+      accessState: state,
+      finalDecision: gateDecision,
+    });
+  }, [
+    roleNormalized,
+    businessId,
+    data?.billing?.paid_through,
+    data?.billing?.locked_override,
+    data?.businessStatus,
+    state,
+    gateDecision,
+  ]);
 
   // Platform admin is never subscription-gated.
-  if (role === "platform_admin") return <>{children}</>;
+  if (bypassActivationGate) return <>{children}</>;
+
+  if (!roleResolved) {
+    return (
+      <div className="min-h-[70vh] flex items-center justify-center p-6">
+        <div className="text-sm text-muted-foreground">Resolving access...</div>
+      </div>
+    );
+  }
 
   if (demoExpired || forcingDemoExpiry) {
     return (

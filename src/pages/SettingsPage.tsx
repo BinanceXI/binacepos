@@ -60,6 +60,7 @@ import { getConfiguredPublicAppUrl, normalizeBaseUrl } from "@/lib/verifyUrl";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { BrandLogo } from "@/components/brand/BrandLogo";
+import { ZimraFiscalisationSettings } from "@/components/settings/ZimraFiscalisationSettings";
 
 /* ============================
    LOCAL STORAGE KEYS (shared)
@@ -77,8 +78,9 @@ const settingsSections = [
   { id: "users", label: "User Management", icon: UserIcon, shortcut: "2" },
   { id: "currency", label: "Currency & Tax", icon: DollarSign, shortcut: "3" },
   { id: "appearance", label: "Appearance", icon: Palette, shortcut: "4" },
+  { id: "fiscal", label: "ZIMRA Fiscalisation", icon: Shield, shortcut: "5" },
   // Security overrides/notifications are not yet enforced in the app; keep Settings clean.
-  { id: "backup", label: "Backup & Export", icon: Database, shortcut: "5" },
+  { id: "backup", label: "Backup & Export", icon: Database, shortcut: "6" },
 ];
 
 /* ============================
@@ -215,8 +217,11 @@ export const SettingsPage = () => {
   const isVerifyBaseManaged = !!configuredPublicAppUrl;
 
   const isAdmin = currentUser?.role === "admin";
+  const normalizedRole = String((currentUser as any)?.role || "").trim().toLowerCase();
+  const isMasterLikeAdmin = ["platform_admin", "master_admin", "super_admin"].includes(normalizedRole);
+  const canManageFiscalisation = isAdmin || isMasterLikeAdmin;
   const canAccessSettings =
-    isAdmin || !!(currentUser as any)?.permissions?.allowSettings;
+    isAdmin || isMasterLikeAdmin || !!(currentUser as any)?.permissions?.allowSettings;
 
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [activeSection, setActiveSection] = useState("business");
@@ -257,6 +262,14 @@ export const SettingsPage = () => {
   const [myNewPassword, setMyNewPassword] = useState("");
   const [myNewPassword2, setMyNewPassword2] = useState("");
   const [savingMyCreds, setSavingMyCreds] = useState(false);
+
+  const visibleSettingsSections = useMemo(
+    () =>
+      settingsSections
+        .filter((section) => (section.id === "fiscal" ? canManageFiscalisation : true))
+        .map((section, index) => ({ ...section, shortcut: String(index + 1) })),
+    [canManageFiscalisation]
+  );
 
   const requireCloudSession = async () => {
     const res = await ensureSupabaseSession();
@@ -756,10 +769,10 @@ export const SettingsPage = () => {
 
     if (e.key >= "1" && e.key <= "9") {
       const index = parseInt(e.key, 10) - 1;
-      const sec = settingsSections[index];
+      const sec = visibleSettingsSections[index];
       if (sec) setActiveSection(sec.id);
     }
-  }, []);
+  }, [visibleSettingsSections]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
@@ -776,6 +789,11 @@ export const SettingsPage = () => {
       window.removeEventListener("offline", onOff);
     };
   }, []);
+
+  useEffect(() => {
+    if (visibleSettingsSections.some((s) => s.id === activeSection)) return;
+    setActiveSection(visibleSettingsSections[0]?.id || "business");
+  }, [activeSection, visibleSettingsSections]);
 
   const toggleTheme = () => {
     setIsDark((v) => !v);
@@ -947,7 +965,7 @@ export const SettingsPage = () => {
 
           {/* Mobile: horizontal section bar */}
           <div className="flex lg:hidden gap-2 overflow-x-auto pb-2 no-scrollbar">
-            {settingsSections.map((section) => (
+            {visibleSettingsSections.map((section) => (
               <button
                 key={section.id}
                 onClick={() => setActiveSection(section.id)}
@@ -966,7 +984,7 @@ export const SettingsPage = () => {
 
           {/* Desktop: vertical nav */}
           <div className="hidden lg:flex flex-col gap-2">
-            {settingsSections.map((section) => (
+            {visibleSettingsSections.map((section) => (
               <button
                 key={section.id}
                 onClick={() => setActiveSection(section.id)}
@@ -1637,6 +1655,19 @@ export const SettingsPage = () => {
                   </button>
                 </CardContent>
               </Card>
+            </motion.div>
+          )}
+
+          {/* FISCAL */}
+          {activeSection === "fiscal" && (
+            <motion.div
+              key="fiscal"
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0 }}
+              className="space-y-4"
+            >
+              <ZimraFiscalisationSettings canManage={canManageFiscalisation} />
             </motion.div>
           )}
 
