@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
+import { usePOS } from '@/contexts/POSContext';
 import { 
   startOfDay, endOfDay, subDays, startOfMonth, 
   format, parseISO, getHours 
@@ -19,8 +20,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 
 export const ProfitAnalysisPage = () => {
+  const { currentUser } = usePOS();
   const [rangeType, setRangeType] = useState<'today' | 'week' | 'month' | 'custom'>('week');
   const [customDate, setCustomDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const businessId = String(currentUser?.business_id || '').trim() || null;
 
   // --- KEYBOARD SHORTCUTS ---
   useEffect(() => {
@@ -38,8 +41,10 @@ export const ProfitAnalysisPage = () => {
 
   // --- 1. FETCH DATA (Smart Query) ---
   const { data: salesData = [], isLoading } = useQuery({
-    queryKey: ['profitAnalysis', rangeType, customDate],
+    queryKey: ['profitAnalysis', businessId || 'no-business', rangeType, customDate],
+    enabled: !!businessId,
     queryFn: async () => {
+      if (!businessId) return [];
       const now = new Date();
       let start = startOfDay(now);
       let end = endOfDay(now);
@@ -60,25 +65,58 @@ export const ProfitAnalysisPage = () => {
         end = endOfDay(selected);
       }
 
-      const { data, error } = await supabase
-        .from('order_items')
-        .select(`
-          quantity,
-          price_at_sale,
-          cost_at_sale,
-          created_at,
-          products (
-            name,
-            cost_price,
-            category
-          )
-        `)
+      const { data: orders, error: ordersError } = await supabase
+        .from('orders')
+        .select('id')
+        .eq('business_id', businessId)
         .gte('created_at', start.toISOString())
         .lte('created_at', end.toISOString())
         .order('created_at', { ascending: true });
 
-      if (error) throw error;
-      return data;
+      if (ordersError) throw ordersError;
+
+      const orderIds = Array.from(new Set((orders || []).map((o: any) => String(o.id || '')).filter(Boolean)));
+      if (!orderIds.length) return [];
+
+      const { data: items, error: itemsError } = await supabase
+        .from('order_items')
+        .select('order_id, product_id, product_name, quantity, price_at_sale, cost_at_sale, created_at')
+        .in('order_id', orderIds)
+        .order('created_at', { ascending: true });
+
+      if (itemsError) throw itemsError;
+
+      const productIds = Array.from(
+        new Set((items || []).map((it: any) => String(it.product_id || '')).filter(Boolean))
+      );
+
+      const productMap = new Map<string, any>();
+      if (productIds.length) {
+        const { data: products, error: productsError } = await supabase
+          .from('products')
+          .select('id, name, cost_price, category')
+          .in('id', productIds);
+        if (productsError) throw productsError;
+        (products || []).forEach((p: any) => productMap.set(String(p.id), p));
+      }
+
+      return (items || []).map((it: any) => {
+        const prod = it.product_id ? productMap.get(String(it.product_id)) : null;
+        return {
+          ...it,
+          products: prod
+            ? {
+                name: prod.name,
+                cost_price: prod.cost_price,
+                category: prod.category,
+              }
+            : {
+                name: it.product_name || 'Unknown Item',
+                cost_price: 0,
+                category: null,
+              },
+        };
+      });
     },
     staleTime: 1000 * 60 * 5 // Cache for 5 mins
   });
@@ -180,6 +218,16 @@ export const ProfitAnalysisPage = () => {
     link.click();
     toast.success("Report Downloaded");
   };
+
+  if (!businessId) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center p-6">
+        <div className="max-w-md rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
+          Profit reports require a tenant business session. Sign in as a business user or impersonate a tenant from the platform admin console.
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) return <div className="flex h-screen items-center justify-center"><Loader2 className="animate-spin h-8 w-8 text-primary"/></div>;
 

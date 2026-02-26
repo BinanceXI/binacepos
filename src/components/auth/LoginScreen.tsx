@@ -127,7 +127,12 @@ export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
   const turnstileContainerRef = useRef<HTMLDivElement>(null);
   const turnstileWidgetIdRef = useRef<any>(null);
 
-  const showDemo = isDemoEntry() || String((import.meta as any)?.env?.VITE_DEMO_MODE || "").trim() === "1";
+  const liveDemoEnabled = ["1", "true", "yes"].includes(
+    String((import.meta as any)?.env?.VITE_ENABLE_LIVE_DEMO || "").trim().toLowerCase()
+  );
+  const showDemo =
+    liveDemoEnabled &&
+    (isDemoEntry() || String((import.meta as any)?.env?.VITE_DEMO_MODE || "").trim() === "1");
 
   useEffect(() => {
     usernameRef.current?.focus();
@@ -412,6 +417,10 @@ export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
 
   const startDemoSession = async () => {
     if (demoLoading || loading) return;
+    if (!liveDemoEnabled) {
+      toast.error("Live demo is disabled on this deployment");
+      return;
+    }
     if (!navigator.onLine) {
       toast.error("Live demo requires an internet connection");
       return;

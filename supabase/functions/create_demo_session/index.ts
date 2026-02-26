@@ -194,6 +194,14 @@ serve(async (req) => {
     origin && origin.trim()
       ? ({ ...corsHeaders, "Access-Control-Allow-Origin": origin.trim(), Vary: "Origin" } as Record<string, string>)
       : (corsHeaders as Record<string, string>);
+  const demoEnabled = ["1", "true", "yes"].includes(
+    String(Deno.env.get("ENABLE_LIVE_DEMO") || "").trim().toLowerCase()
+  );
+
+  if (!demoEnabled) {
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+    return json(403, { error: "Live demo is disabled" }, cors);
+  }
 
   if (allowedHosts) {
     const originHost = getOriginHost(req);

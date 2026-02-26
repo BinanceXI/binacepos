@@ -101,6 +101,7 @@ export const InventoryPage = () => {
     price: "",
     cost: "",
     stock: "",
+    lowStockThreshold: "5",
     type: "good",
     category: "General",
     sku: "",
@@ -204,6 +205,7 @@ export const InventoryPage = () => {
       price: "",
       cost: "",
       stock: "",
+      lowStockThreshold: "5",
       type: "good",
       category: "General",
       sku: "",
@@ -228,6 +230,12 @@ export const InventoryPage = () => {
       price: (product.price ?? 0).toString(),
       cost: ((product as any).cost_price ?? 0).toString(),
       stock: ((product as any).stock_quantity ?? 0).toString(),
+      lowStockThreshold: String(
+        Math.max(
+          0,
+          Number((product as any).lowStockThreshold ?? (product as any).low_stock_threshold ?? 5) || 0
+        )
+      ),
       type: (product.type as string) || "good",
       category: (product as any).category || "General",
       sku: (product as any).sku || "",
@@ -311,6 +319,10 @@ export const InventoryPage = () => {
         price: parseFloat(newItem.price) || 0,
         cost_price: parseFloat(newItem.cost) || 0,
         stock_quantity: newItem.type === "good" ? parseInt(newItem.stock) || 0 : 0,
+        low_stock_threshold:
+          newItem.type === "good"
+            ? Math.max(0, parseInt(newItem.lowStockThreshold) || 0)
+            : null,
         type: newItem.type,
         category: finalCategory,
         sku: (newItem.sku || "").trim() || null,
@@ -329,7 +341,9 @@ export const InventoryPage = () => {
           ...payload,
           shortcutCode: payload.shortcut_code || undefined,
           lowStockThreshold:
-            (idx >= 0 ? (list[idx] as any).lowStockThreshold : 5) ?? 5,
+            payload.low_stock_threshold ??
+            (idx >= 0 ? (list[idx] as any).lowStockThreshold : 5) ??
+            5,
           stock_quantity: Number(payload.stock_quantity) || 0,
           cost_price: Number(payload.cost_price) || 0,
           price: Number(payload.price) || 0,
@@ -1007,6 +1021,21 @@ export const InventoryPage = () => {
                 </div>
               )}
             </div>
+
+            {newItem.type === "good" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Low Stock Threshold</label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={newItem.lowStockThreshold}
+                  onChange={(e) => setNewItem({ ...newItem, lowStockThreshold: e.target.value })}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Item shows a low-stock warning when stock is less than or equal to this number.
+                </p>
+              </div>
+            )}
 
             {/* Category + SKU */}
             <div className="grid grid-cols-2 gap-4">

@@ -52,6 +52,7 @@ type BusinessRow = {
   status: string;
   plan_type: string | null;
   created_at: string;
+  is_demo?: boolean | null;
   deleted_at?: string | null;
   deleted_reason?: string | null;
   business_billing?: BillingLite | BillingLite[] | null;
@@ -145,11 +146,11 @@ export function PlatformBusinessesPage() {
       const { data, error } = await supabase
         .from("businesses")
         .select(
-          "id, name, status, plan_type, created_at, deleted_at, deleted_reason, business_billing(max_devices, currency, paid_through, grace_days, locked_override, trial_started_at, trial_ends_at, activated_at)"
+          "id, name, status, plan_type, is_demo, created_at, deleted_at, deleted_reason, business_billing(max_devices, currency, paid_through, grace_days, locked_override, trial_started_at, trial_ends_at, activated_at)"
         )
         .order("created_at", { ascending: false });
       if (error) throw error;
-      return (data || []) as unknown as BusinessRow[];
+      return ((data || []) as unknown as BusinessRow[]).filter((b) => b.is_demo !== true);
     },
     staleTime: 10_000,
     refetchOnWindowFocus: false,

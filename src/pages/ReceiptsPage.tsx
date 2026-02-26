@@ -197,22 +197,6 @@ const [printerPort, setPrinterPort] = useState(
   // printing
   const [printData, setPrintData] = useState<PrintData | null>(null);
   const [isPrinting, setIsPrinting] = useState(false);
-
-  const runReprint = useCallback(async (data: PrintData) => {
-    setPrintData(data);
-    setIsPrinting(true);
-    try {
-      // Let React commit #receipt-print-area before printer pipeline reads it.
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      await printReceiptSmart(toThermalPayload(data, settings as any));
-      toast.success("Print sent");
-    } catch (e: any) {
-      toast.error(e?.message || "Print failed");
-    } finally {
-      setTimeout(() => setIsPrinting(false), 700);
-    }
-  }, [settings]);
   useEffect(() => {
   if (activeTab !== "receipts") return;
 
@@ -234,7 +218,7 @@ const [printerPort, setPrinterPort] = useState(
   // 1) Store settings
   // --------------------
   const { data: settings } = useQuery({
-    queryKey: ["storeSettings"],
+    queryKey: ["storeSettings", currentUser?.business_id || "no-business"],
     queryFn: async () => {
       const { data, error } = await supabase.from("store_settings").select("*").single();
 
@@ -261,6 +245,22 @@ const [printerPort, setPrinterPort] = useState(
   const [formData, setFormData] = useState<StoreSettings>({});
   useEffect(() => {
     if (settings) setFormData(settings);
+  }, [settings]);
+
+  const runReprint = useCallback(async (data: PrintData) => {
+    setPrintData(data);
+    setIsPrinting(true);
+    try {
+      // Let React commit #receipt-print-area before printer pipeline reads it.
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await printReceiptSmart(toThermalPayload(data, settings as any));
+      toast.success("Print sent");
+    } catch (e: any) {
+      toast.error(e?.message || "Print failed");
+    } finally {
+      setTimeout(() => setIsPrinting(false), 700);
+    }
   }, [settings]);
 
   // 2) Save settings
@@ -351,7 +351,7 @@ const testThermalPrint = async () => {
   const isOnline = typeof navigator !== "undefined" ? navigator.onLine : true;
 
   const { data: onlineReceipts = [], isLoading: receiptsLoading, refetch } = useQuery({
-    queryKey: ["receipts", q],
+    queryKey: ["receipts", currentUser?.business_id || "no-business", q],
     queryFn: async () => {
   if (!navigator.onLine) return [];
 

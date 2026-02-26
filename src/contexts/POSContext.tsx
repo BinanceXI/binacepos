@@ -343,6 +343,17 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
   /* --------------------------- SESSION PERSISTENCE -------------------------- */
 
   const setCurrentUser = (user: POSUser | null) => {
+    const prevUser = currentUser;
+    const prevScope = `${String(prevUser?.business_id || "")}:${String(prevUser?.id || "")}`;
+    const nextScope = `${String(user?.business_id || "")}:${String(user?.id || "")}`;
+    if (prevScope !== nextScope) {
+      try {
+        localStorage.removeItem("REACT_QUERY_OFFLINE_CACHE");
+      } catch {
+        // ignore
+      }
+      queryClient.clear();
+    }
     _setCurrentUser(user);
     if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
     else localStorage.removeItem(USER_KEY);
