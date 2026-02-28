@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # ✅ Make Vite actually receive these during build
-      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-      VITE_PUBLIC_APP_URL: ${{ secrets.VITE_PUBLIC_APP_URL }}
+      # Prefer repository secrets/vars; fallback keeps CI buildable.
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL || 'https://bqlejluaicankgomrizi.supabase.co' }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJxbGVqbHVhaWNhbmtnb21yaXppIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEwNjg1MTUsImV4cCI6MjA4NjY0NDUxNX0.E9iKKz5K-hssvQ5bGkX1eS7GF8w0-MB8S_QZojWBxFI' }}
+      VITE_PUBLIC_APP_URL: ${{ secrets.VITE_PUBLIC_APP_URL || vars.VITE_PUBLIC_APP_URL || '' }}
 
     steps:
       - name: Checkout repo

@@ -212,7 +212,7 @@ mod windows_printing {
         pDatatype: data_type.as_ptr() as *mut u16,
       };
 
-      let job_id = StartDocPrinterW(handle, 1, (&doc_info as *const DOC_INFO_1W).cast::<u8>());
+      let job_id = StartDocPrinterW(handle, 1, &doc_info as *const DOC_INFO_1W);
       if job_id == 0 {
         ClosePrinter(handle);
         return Err("StartDocPrinter failed".to_string());

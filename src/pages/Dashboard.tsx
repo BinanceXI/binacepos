@@ -22,6 +22,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { startOfDay, endOfDay, format } from 'date-fns';
+import { usePOS } from '@/contexts/POSContext';
 
 // --- COMPONENTS ---
 
@@ -65,6 +66,8 @@ const StatCard = ({
 export const DashboardPage = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { currentUser } = usePOS();
+  const tenantBusinessId = String(currentUser?.business_id || '').trim() || 'no-business';
   const today = new Date();
   const dayKey = format(today, 'yyyy-MM-dd');
 
@@ -87,7 +90,7 @@ export const DashboardPage = () => {
 
   // --- 1. FETCH TODAY'S ORDERS (REAL DATA) ---
   const { data: todayStats, isLoading: statsLoading } = useQuery({
-    queryKey: ['dashboardStats', dayKey],
+    queryKey: ['dashboardStats', tenantBusinessId, dayKey],
     queryFn: async () => {
       const start = startOfDay(today).toISOString();
       const end = endOfDay(today).toISOString();
@@ -107,27 +110,32 @@ export const DashboardPage = () => {
 
   // --- 2. FETCH LOW STOCK ITEMS ---
   const { data: lowStockItems } = useQuery({
-    queryKey: ['lowStock'],
+    queryKey: ['lowStock', tenantBusinessId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('products')
-        .select('id,name,stock_quantity,low_stock_threshold,type')
-        .eq('type', 'good') // Only check physical goods
+        .select('id,name,stock_quantity,low_stock_threshold,type,is_archived')
         .order('stock_quantity', { ascending: true });
 
       if (error) throw error;
       const rows = data || [];
       return rows.filter((product: any) => {
+        if (product?.is_archived) return false;
+        const normalizedType = String(product?.type || '').trim().toLowerCase();
+        if (normalizedType !== 'good') return false;
         const stock = Number(product.stock_quantity ?? 0);
         const threshold = Number(product.low_stock_threshold ?? 5);
         return stock <= threshold;
       });
-    }
+    },
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
   });
 
   // --- 3. FETCH RECENT TRANSACTIONS ---
   const { data: recentTx } = useQuery({
-    queryKey: ['recentTx'],
+    queryKey: ['recentTx', tenantBusinessId],
     queryFn: async () => {
       const { data: orders, error } = await supabase
         .from('orders')

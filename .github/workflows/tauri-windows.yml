@@ -3,6 +3,8 @@ name: Build Windows App (Tauri)
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "main"
     tags:
       - "v*"
 
@@ -10,9 +12,9 @@ jobs:
   build-windows:
     runs-on: windows-latest
     env:
-      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-      VITE_PUBLIC_APP_URL: ${{ secrets.VITE_PUBLIC_APP_URL }}
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL || 'https://bqlejluaicankgomrizi.supabase.co' }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJxbGVqbHVhaWNhbmtnb21yaXppIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEwNjg1MTUsImV4cCI6MjA4NjY0NDUxNX0.E9iKKz5K-hssvQ5bGkX1eS7GF8w0-MB8S_QZojWBxFI' }}
+      VITE_PUBLIC_APP_URL: ${{ secrets.VITE_PUBLIC_APP_URL || vars.VITE_PUBLIC_APP_URL || '' }}
 
     steps:
       - name: Checkout repo
@@ -37,19 +39,20 @@ jobs:
         run: npm ci
 
       - name: Create .env for Vite build
-        shell: bash
+        shell: pwsh
         run: |
-          echo "VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}" > .env
-          echo "VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}" >> .env
-          echo "VITE_PUBLIC_APP_URL=${{ secrets.VITE_PUBLIC_APP_URL }}" >> .env
+          Set-Content -Path .env -Value "VITE_SUPABASE_URL=$env:VITE_SUPABASE_URL"
+          Add-Content -Path .env -Value "VITE_SUPABASE_ANON_KEY=$env:VITE_SUPABASE_ANON_KEY"
+          Add-Content -Path .env -Value "VITE_PUBLIC_APP_URL=$env:VITE_PUBLIC_APP_URL"
 
       - name: Check env status
-        shell: bash
+        shell: pwsh
         run: |
-          if [ -n "$VITE_SUPABASE_URL" ] && [ -n "$VITE_SUPABASE_ANON_KEY" ] && [ -n "$VITE_PUBLIC_APP_URL" ]; then
-            echo "VITE env looks present."
+          if ($env:VITE_SUPABASE_URL -and $env:VITE_SUPABASE_ANON_KEY) {
+            Write-Host "VITE env looks present."
           else
-            echo "Some VITE env vars are missing. Build may use defaults."
+            Write-Error "VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY missing."
+            exit 1
           fi
 
       - name: Build frontend
