@@ -50,10 +50,10 @@ jobs:
         run: |
           if ($env:VITE_SUPABASE_URL -and $env:VITE_SUPABASE_ANON_KEY) {
             Write-Host "VITE env looks present."
-          else
+          } else {
             Write-Error "VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY missing."
             exit 1
-          fi
+          }
 
       - name: Build frontend
         run: npm run build
