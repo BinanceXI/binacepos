@@ -202,8 +202,7 @@ export function buildReceiptPrintModel(input: ReceiptPrintModelInput): ReceiptPr
     },
     footer: {
       footerMessage: safeString(settings.footer_message) || undefined,
-      poweredByLine: "POWERED BY BINANCE LABS",
+      poweredByLine: "Powered by BinanceXI",
     },
   };
 }
-

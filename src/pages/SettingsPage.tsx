@@ -57,6 +57,7 @@ import { supabase } from "@/lib/supabase";
 import { EXPECTED_SUPABASE_REFS, getBackendInfo } from "@/lib/backendInfo";
 import { ensureSupabaseSession } from "@/lib/supabaseSession";
 import { getConfiguredPublicAppUrl, normalizeBaseUrl } from "@/lib/verifyUrl";
+import { loadStoreSettingsWithBusinessFallback } from "@/lib/storeSettings";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { BrandLogo } from "@/components/brand/BrandLogo";
@@ -219,6 +220,7 @@ export const SettingsPage = () => {
   const isVerifyBaseManaged = !!configuredPublicAppUrl;
 
   const isAdmin = currentUser?.role === "admin";
+  const tenantBusinessId = String((currentUser as any)?.business_id || "").trim();
   const normalizedRole = String((currentUser as any)?.role || "").trim().toLowerCase();
   const isMasterLikeAdmin = ["platform_admin", "master_admin", "super_admin"].includes(normalizedRole);
   const canManageFiscalisation = isAdmin || isMasterLikeAdmin;
@@ -285,7 +287,7 @@ export const SettingsPage = () => {
   ============================ */
 
   const { data: settings, isFetching: settingsLoading } = useQuery({
-    queryKey: ["storeSettings"],
+    queryKey: ["storeSettings", tenantBusinessId || "no-business"],
     queryFn: async () => {
       const defaults: StoreSettings = {
         business_name: "Your Business",
@@ -304,9 +306,9 @@ export const SettingsPage = () => {
         return defaults;
       }
 
-      const { data, error } = await supabase.from("store_settings").select("*").maybeSingle();
-
-      if (error && (error as any).code !== "PGRST116") throw error;
+      const data = await loadStoreSettingsWithBusinessFallback({
+        businessId: tenantBusinessId || null,
+      });
 
       const merged = { ...defaults, ...(data || {}) } as StoreSettings;
 
@@ -371,17 +373,20 @@ export const SettingsPage = () => {
   ============================ */
 
   const { data: users = [], isFetching: usersLoading } = useQuery({
-    queryKey: ["profiles"],
+    queryKey: ["profiles", tenantBusinessId || "no-business"],
     queryFn: async () => {
+      if (!tenantBusinessId) return [];
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, username, full_name, role, permissions, active")
+        .select("id, username, full_name, role, permissions, active, business_id")
+        .eq("business_id", tenantBusinessId)
+        .in("role", ["admin", "cashier"])
         .order("role")
         .order("full_name");
       if (error) throw error;
       return data || [];
     },
-    enabled: isAdmin && isOnline,
+    enabled: isAdmin && isOnline && !!tenantBusinessId,
     staleTime: 1000 * 10,
     refetchOnWindowFocus: false,
   });

@@ -518,7 +518,7 @@ export const InventoryPage = () => {
   );
 
   const lowStockCount = statsBase.filter((p: any) => {
-    const lowThr = (p as any).lowStockThreshold || 5;
+    const lowThr = Number((p as any).lowStockThreshold ?? (p as any).low_stock_threshold ?? 5);
     return p.type === "good" && (p.stock_quantity || 0) <= lowThr;
   }).length;
 
@@ -716,7 +716,8 @@ export const InventoryPage = () => {
 
               const low =
                 product.type === "good" &&
-                (product.stock_quantity || 0) <= ((product as any).lowStockThreshold || 5);
+                (product.stock_quantity || 0) <=
+                  Number((product as any).lowStockThreshold ?? (product as any).low_stock_threshold ?? 5);
 
               const out =
                 product.type === "good" && (product.stock_quantity || 0) === 0;

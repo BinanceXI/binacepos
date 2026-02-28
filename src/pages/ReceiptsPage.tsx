@@ -32,6 +32,7 @@ import { PrintableReceipt } from "@/components/pos/PrintableReceipt";
 import type { CartItem, Product, Discount } from "@/types/pos";
 import { Capacitor } from "@capacitor/core";
 import { getTenantScopeFromLocalUser, readScopedJSON, writeScopedJSON } from "@/lib/tenantScope";
+import { loadStoreSettingsWithBusinessFallback } from "@/lib/storeSettings";
 // 🔥 THERMAL PRINTER
 import {
   PRINTER_AUTO_PRINT_SALES_KEY,
@@ -148,6 +149,41 @@ function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
 
+function mapPrinterErrorMessage(err: any, transport: string, tauriRuntime: boolean) {
+  const raw = String(err?.message || "Print failed");
+  const lower = raw.toLowerCase();
+
+  if (lower.includes("printer ip not set")) {
+    return "TCP transport requires printer IP and port. Open Receipts Settings -> Thermal Printer and set both values.";
+  }
+  if (lower.includes("serial/com port not set")) {
+    return "Serial transport requires a COM port. Use Detect, select the paired USB/Bluetooth COM port, then save.";
+  }
+  if (lower.includes("windows printer name not set")) {
+    return "Spooler transport requires a Windows printer name. Use Detect and choose the exact printer name.";
+  }
+  if (lower.includes("requires desktop runtime")) {
+    return "This transport requires the desktop app. Use browser mode on web, or open the Windows desktop app.";
+  }
+  if (lower.includes("tauri") && !tauriRuntime) {
+    return "Native desktop print is unavailable in browser mode. Switch transport to Browser Fallback or open the desktop app.";
+  }
+  if (lower.includes("out of paper") || lower.includes("offline")) {
+    return "Printer is not ready (offline/paper issue). Check printer power, paper, and cable/network.";
+  }
+
+  if (transport === "serial") {
+    return `${raw}. Confirm the COM port and baud rate match the printer settings.`;
+  }
+  if (transport === "spooler") {
+    return `${raw}. Confirm the printer exists in Windows Printers and supports raw ESC/POS data.`;
+  }
+  if (transport === "tcp") {
+    return `${raw}. Confirm printer IP/port 9100 and network reachability.`;
+  }
+  return raw;
+}
+
 function toThermalPayload(data: PrintData, settings?: ReceiptStoreSettings | null) {
   return {
     receiptId: data.receiptId,
@@ -176,6 +212,7 @@ function toThermalPayload(data: PrintData, settings?: ReceiptStoreSettings | nul
 
 export const ReceiptsPage = () => {
   const { currentUser } = usePOS();
+  const tenantBusinessId = String(currentUser?.business_id || "").trim();
   const isAdmin = currentUser?.role === "admin";
   const canVoid = isAdmin || !!currentUser?.permissions?.allowVoid;
   const queryClient = useQueryClient();
@@ -218,7 +255,9 @@ useEffect(() => {
     ["1", "true", "yes"].includes(String(localStorage.getItem(PRINTER_AUTO_PRINT_SALES_KEY) ?? "1").toLowerCase())
   );
   const [fallbackToBrowser, setFallbackToBrowser] = useState(
-    ["1", "true", "yes"].includes(String(localStorage.getItem(PRINTER_FALLBACK_BROWSER_KEY) ?? "1").toLowerCase())
+    ["1", "true", "yes"].includes(
+      String(localStorage.getItem(PRINTER_FALLBACK_BROWSER_KEY) ?? (tauriRuntime ? "0" : "1")).toLowerCase()
+    )
   );
   const [serialPorts, setSerialPorts] = useState<SerialPortDto[]>([]);
   const [serialBusy, setSerialBusy] = useState(false);
@@ -256,13 +295,8 @@ useEffect(() => {
   // 1) Store settings
   // --------------------
   const { data: settings } = useQuery({
-    queryKey: ["storeSettings", currentUser?.business_id || "no-business"],
+    queryKey: ["storeSettings", tenantBusinessId || "no-business"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("store_settings").select("*").single();
-
-      // No row yet => defaults (PGRST116)
-      if (error && (error as any).code !== "PGRST116") throw error;
-
       const defaults: StoreSettings = {
         business_name: "Your Business",
         address: "",
@@ -273,7 +307,10 @@ useEffect(() => {
         qr_code_data: configuredPublicAppUrl || window.location.origin,
       };
 
-      return (data as StoreSettings) || defaults;
+      const data = await loadStoreSettingsWithBusinessFallback({
+        businessId: tenantBusinessId || null,
+      });
+      return { ...defaults, ...(data as StoreSettings | null) };
     },
     staleTime: 1000 * 60 * 60,
     refetchOnWindowFocus: false,
@@ -295,11 +332,12 @@ useEffect(() => {
       await printReceiptSmart(toThermalPayload(data, settings as any), overrides);
       toast.success("Print sent");
     } catch (e: any) {
-      toast.error(e?.message || "Print failed");
+      const transport = String(overrides?.transport || normalizePrinterTransport(printerTransport));
+      toast.error(mapPrinterErrorMessage(e, transport, tauriRuntime));
     } finally {
       setTimeout(() => setIsPrinting(false), 700);
     }
-  }, [settings]);
+  }, [printerTransport, settings, tauriRuntime]);
 
   // 2) Save settings
   const updateSettingsMutation = useMutation({
@@ -427,6 +465,22 @@ const testThermalPrint = async () => {
   const qrBaseRaw = (formData.qr_code_data || "").trim();
   const qrBaseNormalized = normalizeBaseUrl(qrBaseRaw);
   const qrBaseInvalid = !isVerifyBaseManaged && !!qrBaseRaw && !qrBaseNormalized;
+  const printerTransportHint = useMemo(() => {
+    const mode = normalizePrinterTransport(printerTransport);
+    if (mode === "tcp") {
+      return "TCP requires printer IP and port (usually 9100) on the same network.";
+    }
+    if (mode === "serial") {
+      return "Serial/COM requires the exact COM port and matching baud rate from your printer.";
+    }
+    if (mode === "spooler") {
+      return "Spooler requires a Windows-installed printer name and works only in the desktop app.";
+    }
+    if (mode === "browser") {
+      return "Browser mode opens the print dialog; use desktop transport for silent printing.";
+    }
+    return "";
+  }, [printerTransport]);
 
   // --------------------
   // 3) Receipts list (online)
@@ -913,6 +967,11 @@ const testThermalPrint = async () => {
                         Serial and spooler transports require the Windows desktop (Tauri) app.
                       </div>
                     )}
+                    {printerTransportHint ? (
+                      <div className="text-xs text-slate-300 bg-slate-950/70 border border-slate-800 rounded-md p-2">
+                        {printerTransportHint}
+                      </div>
+                    ) : null}
 
                     <div className="flex gap-2">
                       <Button onClick={savePrinterSettings} className="flex-1" disabled={!isAdmin}>

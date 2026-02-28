@@ -111,13 +111,17 @@ export const DashboardPage = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('products')
-        .select('*')
+        .select('id,name,stock_quantity,low_stock_threshold,type')
         .eq('type', 'good') // Only check physical goods
-        .lt('stock_quantity', 6) // Threshold < 6
-        .limit(5);
+        .order('stock_quantity', { ascending: true });
 
       if (error) throw error;
-      return data || [];
+      const rows = data || [];
+      return rows.filter((product: any) => {
+        const stock = Number(product.stock_quantity ?? 0);
+        const threshold = Number(product.low_stock_threshold ?? 5);
+        return stock <= threshold;
+      });
     }
   });
 
@@ -350,7 +354,7 @@ export const DashboardPage = () => {
             <div className="text-sm text-muted-foreground py-4">All stock levels are healthy!</div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-              {lowStockItems?.map((product: any, i: number) => (
+              {lowStockItems?.slice(0, 5).map((product: any, i: number) => (
                 <motion.div
                   key={product.id}
                   initial={{ opacity: 0, scale: 0.95 }}

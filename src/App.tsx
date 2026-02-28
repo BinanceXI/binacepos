@@ -60,6 +60,7 @@ const AppRoutes = () => {
   const role = (currentUser as any)?.role;
   const isPlatformAdmin = isPlatformLikeRole(role);
   const isAdmin = role === "admin";
+  const defaultBusinessRoute = isAdmin ? "/dashboard" : "/pos";
 
   const RequirePermission = ({
     permission,
@@ -72,6 +73,18 @@ const AppRoutes = () => {
   }) => {
     if (!currentUser) return <Navigate to="/" replace />;
     if (isAdmin || can(permission)) return <>{children}</>;
+    return <Navigate to={fallbackPath} replace />;
+  };
+
+  const RequireAdmin = ({
+    children,
+    fallbackPath = "/pos",
+  }: {
+    children: ReactNode;
+    fallbackPath?: string;
+  }) => {
+    if (!currentUser) return <Navigate to="/" replace />;
+    if (isAdmin) return <>{children}</>;
     return <Navigate to={fallbackPath} replace />;
   };
 
@@ -191,15 +204,17 @@ const AppRoutes = () => {
         </>
       ) : (
         <>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/" element={<Navigate to={defaultBusinessRoute} replace />} />
 
           <Route
             path="/dashboard"
             element={
               <SubscriptionGate>
-                <MainLayout>
-                  <DashboardPage />
-                </MainLayout>
+                <RequireAdmin>
+                  <MainLayout>
+                    <DashboardPage />
+                  </MainLayout>
+                </RequireAdmin>
               </SubscriptionGate>
             }
           />

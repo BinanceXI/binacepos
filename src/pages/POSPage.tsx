@@ -39,6 +39,8 @@ import { ServiceBookingsDialog } from "@/components/services/ServiceBookingsDial
 import { pullRecentServiceBookings, pushUnsyncedServiceBookings } from "@/lib/serviceBookings";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import type { ReceiptStoreSettings } from "@/core/receipts/receiptPrintModel";
+import { loadStoreSettingsWithBusinessFallback } from "@/lib/storeSettings";
+import { getTenantScopeFromLocalUser } from "@/lib/tenantScope";
 
 
 type FocusArea = "search" | "customer" | "products" | "cart";
@@ -95,11 +97,13 @@ export const POSPage = () => {
   return true;
 }, []);
   const queryClient = useQueryClient();
+  const scopedBusinessId = getTenantScopeFromLocalUser()?.businessId || "no-business";
   const { data: receiptStoreSettings } = useQuery<ReceiptStoreSettings>({
-    queryKey: ["storeSettings"],
+    queryKey: ["storeSettings", scopedBusinessId],
     queryFn: async () => {
-      const { data, error } = await supabase.from("store_settings").select("*").maybeSingle();
-      if (error) throw error;
+      const data = await loadStoreSettingsWithBusinessFallback({
+        businessId: scopedBusinessId === "no-business" ? null : scopedBusinessId,
+      });
       return (data || {}) as ReceiptStoreSettings;
     },
     staleTime: 1000 * 60 * 60,
@@ -284,7 +288,7 @@ const [showMobileCart, setShowMobileCart] = useState(false);
       return (data || []).map((p: any) => ({
         ...p,
         shortcutCode: p.shortcut_code,
-        lowStockThreshold: p.low_stock_threshold || 5,
+        lowStockThreshold: p.low_stock_threshold ?? 5,
         image: p.image_url,
       })) as Product[];
     },
@@ -411,10 +415,12 @@ const [showMobileCart, setShowMobileCart] = useState(false);
         return true;
       }
 
-      addToCart(product);
-      setSearchQuery("");
-      toast.success(`${product.name} added`);
-      return true;
+      const added = addToCart(product);
+      if (added) {
+        setSearchQuery("");
+        toast.success(`${product.name} added`);
+      }
+      return added;
     },
     [addToCart, products]
   );
@@ -650,8 +656,8 @@ const [showMobileCart, setShowMobileCart] = useState(false);
       return;
     }
 
-    addToCart(p);
-    toast.success(`${p.name} added`);
+    const added = addToCart(p);
+    if (added) toast.success(`${p.name} added`);
   }, [filteredProducts, selectedProductIndex, addToCart]);
 
   const handleKeyDown = useCallback(
@@ -735,8 +741,8 @@ const [showMobileCart, setShowMobileCart] = useState(false);
           if (!found && filteredProducts.length > 0) {
             const first: any = filteredProducts[0];
             if (first.type === "good" && Number(first.stock_quantity ?? 0) <= 0) return;
-            addToCart(first);
-            setSearchQuery("");
+            const added = addToCart(first);
+            if (added) setSearchQuery("");
           }
         }
         return;
@@ -1001,7 +1007,8 @@ const [showMobileCart, setShowMobileCart] = useState(false);
                   key={product.id}
                   product={product}
                   onAdd={(p) => {
-                    addToCart(p);
+                    const added = addToCart(p);
+                    if (!added) return;
                     setFocusArea("products");
                   }}
                   isSelected={i === selectedProductIndex && focusArea === "products"}
@@ -1085,6 +1092,11 @@ const [showMobileCart, setShowMobileCart] = useState(false);
                   onInc={() => incQty(item.lineId, item.quantity)}
                   onRemove={() => removeLine(item.lineId)}
                   onDiscount={canDiscount ? () => openItemDiscount(item.lineId) : undefined}
+                  disableInc={
+                    item?.product?.type === "good" &&
+                    Number(item?.quantity ?? 0) >=
+                      Math.max(0, Math.floor(Number(item?.product?.stock_quantity ?? item?.product?.stock ?? 0)))
+                  }
                 />
               ))
             )}
@@ -1196,6 +1208,11 @@ const [showMobileCart, setShowMobileCart] = useState(false);
                       onInc={() => incQty(item.lineId, item.quantity)}
                       onRemove={() => removeLine(item.lineId)}
                       onDiscount={canDiscount ? () => openItemDiscount(item.lineId) : undefined}
+                      disableInc={
+                        item?.product?.type === "good" &&
+                        Number(item?.quantity ?? 0) >=
+                          Math.max(0, Math.floor(Number(item?.product?.stock_quantity ?? item?.product?.stock ?? 0)))
+                      }
                     />
                   ))
                 )}
@@ -1367,6 +1384,7 @@ const ProductCard = ({
 }) => {
   const p: any = product as any;
   const isOutOfStock = p.type === "good" && Number(p.stock_quantity ?? 0) <= 0;
+  const lowStockThreshold = Number(p.lowStockThreshold ?? p.low_stock_threshold ?? 5);
 
   return (
     <button
@@ -1380,7 +1398,7 @@ const ProductCard = ({
         isOutOfStock && "opacity-50 grayscale cursor-not-allowed bg-muted"
       )}
     >
-      {p.type === "good" && !isOutOfStock && Number(p.stock_quantity ?? 0) <= Number(p.lowStockThreshold || 5) && (
+      {p.type === "good" && !isOutOfStock && Number(p.stock_quantity ?? 0) <= lowStockThreshold && (
         <span className="absolute top-2 right-2 bg-amber-500/10 text-amber-500 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
           Low Stock
         </span>
@@ -1418,12 +1436,14 @@ const CartItemRow = ({
   onInc,
   onRemove,
   onDiscount,
+  disableInc = false,
 }: {
   item: CartItem;
   onDec: () => void;
   onInc: () => void;
   onRemove: () => void;
   onDiscount?: () => void;
+  disableInc?: boolean;
 }) => {
   const it: any = item as any;
   const unitPrice = it.customPrice ?? it.product.price;
@@ -1476,7 +1496,15 @@ const CartItemRow = ({
 
         <span className="text-xs font-bold w-6 text-center font-mono">{Number(it.quantity ?? 0)}</span>
 
-        <Button type="button" size="icon" variant="ghost" className="h-7 w-7 hover:bg-background shadow-sm" onClick={onInc}>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7 hover:bg-background shadow-sm disabled:opacity-50"
+          onClick={onInc}
+          disabled={disableInc}
+          title={disableInc ? "Stock limit reached" : "Increase quantity"}
+        >
           <Plus className="w-3 h-3" />
         </Button>
       </div>

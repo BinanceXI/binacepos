@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="BinanceXI app icon">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#051a2b"/>
+      <stop offset="100%" stop-color="#0b2f49"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="196" fill="url(#bg)" />
+  <rect x="40" y="40" width="944" height="944" rx="184" fill="#08263a" stroke="#1f4e6a" stroke-width="8" />
+  <image
+    href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MjAiIGhlaWdodD0iOTYiIHZpZXdCb3g9IjAgMCA0MjAgOTYiIHJvbGU9ImltZyIgYXJpYS1sYWJlbD0iQmluYW5jZVhJIFBPUyI+CiAgPHJlY3Qgd2lkdGg9IjQyMCIgaGVpZ2h0PSI5NiIgcng9IjE0IiBmaWxsPSIjZmZmZmZmIi8+CiAgPHJlY3QgeD0iOCIgeT0iOCIgd2lkdGg9IjQwNCIgaGVpZ2h0PSI4MCIgcng9IjEyIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9IiMxMTE4MjciIHN0cm9rZS13aWR0aD0iMiIvPgogIDxyZWN0IHg9IjIwIiB5PSIyMCIgd2lkdGg9IjY4IiBoZWlnaHQ9IjU2IiByeD0iMTAiIGZpbGw9IiMxMTE4MjciLz4KICA8dGV4dCB4PSI1NCIgeT0iNTciIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIyNiIgZm9udC13ZWlnaHQ9IjcwMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iI2ZmZmZmZiI+QlhJPC90ZXh0PgogIDx0ZXh0IHg9IjEwNCIgeT0iNDYiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIyOCIgZm9udC13ZWlnaHQ9IjgwMCIgZmlsbD0iIzExMTgyNyIgbGV0dGVyLXNwYWNpbmc9IjEiPkJJTkFOQ0VYSTwvdGV4dD4KICA8dGV4dCB4PSIxMDQiIHk9IjY3IiBmb250LWZhbWlseT0iQXJpYWwsIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTYiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMxOTdjYmMiIGxldHRlci1zcGFjaW5nPSIxLjUiPlBPUzwvdGV4dD4KPC9zdmc+Cg=="
+    x="112"
+    y="332"
+    width="800"
+    height="360"
+    preserveAspectRatio="xMidYMid meet"
+  />
+</svg>

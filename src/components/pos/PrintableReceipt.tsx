@@ -1,10 +1,11 @@
 // File: src/components/pos/PrintableReceipt.tsx
 import { forwardRef, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
 import { QRCodeSVG } from "qrcode.react";
 import type { CartItem, Discount } from "@/types/pos";
 import { buildReceiptPrintModel, type ReceiptStoreSettings } from "@/core/receipts/receiptPrintModel";
+import { usePOS } from "@/contexts/POSContext";
+import { loadStoreSettingsWithBusinessFallback } from "@/lib/storeSettings";
 
 interface ReceiptProps {
   cart: CartItem[];
@@ -48,12 +49,15 @@ export const PrintableReceipt = forwardRef<HTMLDivElement, ReceiptProps>((props,
     timestamp,
     settingsOverride,
   } = props;
+  const { currentUser } = usePOS();
+  const tenantBusinessId = String(currentUser?.business_id || "").trim();
 
   const { data: settings } = useQuery({
-    queryKey: ["storeSettings"],
+    queryKey: ["storeSettings", tenantBusinessId || "no-business"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("store_settings").select("*").maybeSingle();
-      if (error) throw error;
+      const data = await loadStoreSettingsWithBusinessFallback({
+        businessId: tenantBusinessId || null,
+      });
       return data || {};
     },
     staleTime: 1000 * 60 * 60,
@@ -109,8 +113,16 @@ export const PrintableReceipt = forwardRef<HTMLDivElement, ReceiptProps>((props,
     >
       {/* HEADER */}
       <div className="text-center mb-2">
+        <h2 className="font-black text-[18px] uppercase leading-none mb-0.5">
+          {model.header.businessName}
+        </h2>
+
+        {model.header.address ? <p className="text-[9px]">{model.header.address}</p> : null}
+        {model.header.phone ? <p className="text-[9px]">{model.header.phone}</p> : null}
+        {model.header.taxId ? <p className="text-[9px] font-bold mt-0.5">TAX: {model.header.taxId}</p> : null}
+
         {model.header.logoUrl ? (
-          <div className="mb-1 flex justify-center">
+          <div className="mt-1 mb-1 flex justify-center">
             <img
               src={model.header.logoUrl}
               alt={model.header.logoAlt}
@@ -122,24 +134,16 @@ export const PrintableReceipt = forwardRef<HTMLDivElement, ReceiptProps>((props,
             />
           </div>
         ) : null}
-        <div className="mb-1">
+        <div className="mb-1 text-[8px]">
           <div className="font-black text-[12px] uppercase tracking-[0.22em] leading-none">
             {model.header.brandTitleLines.map((line) => (
               <div key={line}>{line}</div>
             ))}
           </div>
           {model.header.brandSupportLine ? (
-            <div className="text-[8px] font-bold uppercase mt-1">{model.header.brandSupportLine}</div>
+            <div className="text-[8px] uppercase mt-1">{model.header.brandSupportLine}</div>
           ) : null}
         </div>
-
-        <h2 className="font-black text-[18px] uppercase leading-none mb-0.5">
-          {model.header.businessName}
-        </h2>
-
-        {model.header.address ? <p className="text-[9px]">{model.header.address}</p> : null}
-        {model.header.phone ? <p className="text-[9px]">{model.header.phone}</p> : null}
-        {model.header.taxId ? <p className="text-[9px] font-bold mt-0.5">TAX: {model.header.taxId}</p> : null}
       </div>
 
       <div className="border-b border-dashed border-black my-2" />
@@ -256,7 +260,7 @@ export const PrintableReceipt = forwardRef<HTMLDivElement, ReceiptProps>((props,
           <div className="text-[9px] uppercase px-1 whitespace-pre-wrap">{model.footer.footerMessage}</div>
         ) : null}
 
-        <div className="text-[8px] font-bold mt-2">{model.footer.poweredByLine}</div>
+        <div className="text-[7px] opacity-70 mt-2">{model.footer.poweredByLine}</div>
       </div>
     </div>
   );

@@ -66,7 +66,7 @@ function normalizePrinterMode(rawMode: string, platform: string, tauriRuntime = 
   // desktop/web
   if (mode === "browser" || mode === "tcp" || mode === "serial" || mode === "spooler") return mode;
   if (mode === "bt" && tauriRuntime) return "bt";
-  return "browser";
+  return tauriRuntime ? "spooler" : "browser";
 }
 
 function loadPrinterConfig(platform: string, tauriRuntime: boolean, overrides?: PrinterOverrides): PrinterConfig {
@@ -80,7 +80,9 @@ function loadPrinterConfig(platform: string, tauriRuntime: boolean, overrides?: 
   const spooler_printer_name = String(localStorage.getItem(PRINTER_SPOOLER_PRINTER_KEY) || "").trim();
   const fallbackToBrowserRaw = localStorage.getItem(PRINTER_FALLBACK_BROWSER_KEY);
   const fallback_to_browser =
-    fallbackToBrowserRaw == null ? true : ["1", "true", "yes"].includes(String(fallbackToBrowserRaw).toLowerCase());
+    fallbackToBrowserRaw == null
+      ? !tauriRuntime
+      : ["1", "true", "yes"].includes(String(fallbackToBrowserRaw).toLowerCase());
 
   return {
     transport: overrides?.transport || transport,
@@ -203,19 +205,19 @@ function buildFallbackReceiptHtml(d: ThermalReceiptData) {
 
   return `
     <div style="width:58mm;padding:6px;font-family:monospace;font-size:11px;line-height:1.3;color:#000;background:#fff;">
+      <div style="text-align:center;font-weight:800;font-size:16px;margin-top:2px;">${esc(model.header.businessName)}</div>
+      ${model.header.address ? `<div style="text-align:center;">${esc(model.header.address)}</div>` : ""}
+      ${model.header.phone ? `<div style="text-align:center;">${esc(model.header.phone)}</div>` : ""}
+      ${model.header.taxId ? `<div style="text-align:center;font-weight:700;">TAX: ${esc(model.header.taxId)}</div>` : ""}
       ${
         model.header.logoUrl
           ? `<div style="text-align:center;margin-bottom:4px;"><img src="${esc(model.header.logoUrl)}" alt="${esc(model.header.logoAlt)}" style="max-width:${Number(model.header.logoMaxWidthPx || 148)}px;max-height:${Number(model.header.logoMaxHeightPx || 34)}px;width:auto;height:auto;" /></div>`
           : ""
       }
-      <div style="text-align:center;font-weight:800;font-size:11px;letter-spacing:1px;">${model.header.brandTitleLines
+      <div style="text-align:center;font-weight:700;font-size:8px;letter-spacing:0.8px;opacity:0.8;">${model.header.brandTitleLines
         .map((line) => esc(line))
         .join("<br/>")}</div>
-      ${model.header.brandSupportLine ? `<div style="text-align:center;font-size:9px;margin-top:2px;">${esc(model.header.brandSupportLine)}</div>` : ""}
-      <div style="text-align:center;font-weight:800;font-size:16px;margin-top:4px;">${esc(model.header.businessName)}</div>
-      ${model.header.address ? `<div style="text-align:center;">${esc(model.header.address)}</div>` : ""}
-      ${model.header.phone ? `<div style="text-align:center;">${esc(model.header.phone)}</div>` : ""}
-      ${model.header.taxId ? `<div style="text-align:center;font-weight:700;">TAX: ${esc(model.header.taxId)}</div>` : ""}
+      ${model.header.brandSupportLine ? `<div style="text-align:center;font-size:8px;margin-top:2px;opacity:0.7;">${esc(model.header.brandSupportLine)}</div>` : ""}
       <div style="border-top:1px dashed #000;margin:6px 0;"></div>
       <div style="display:flex;justify-content:space-between;font-size:10px;">
         <div>
@@ -256,7 +258,7 @@ function buildFallbackReceiptHtml(d: ThermalReceiptData) {
           : ""
       }
       ${model.footer.footerMessage ? `<div style="text-align:center;margin-top:8px;white-space:pre-wrap;text-transform:uppercase;">${esc(model.footer.footerMessage)}</div>` : ""}
-      <div style="text-align:center;margin-top:8px;font-size:9px;font-weight:700;">${esc(model.footer.poweredByLine)}</div>
+      <div style="text-align:center;margin-top:8px;font-size:8px;opacity:0.75;">${esc(model.footer.poweredByLine)}</div>
     </div>
   `;
 }
@@ -504,18 +506,21 @@ async function buildEscPos(d: ThermalReceiptData) {
   }
 
   parts.push(bytes(ESC, 0x45, 0x01)); // bold on
-  for (const line of model.header.brandTitleLines) {
-    if (!line) continue;
-    parts.push(textLine(line));
-  }
-  parts.push(bytes(ESC, 0x45, 0x00)); // bold off
-  if (model.header.brandSupportLine) parts.push(textLine(model.header.brandSupportLine));
   parts.push(textLine(model.header.businessName));
+  parts.push(bytes(ESC, 0x45, 0x00)); // bold off
   if (model.header.address) {
     for (const line of splitPrinterText(model.header.address, 32)) parts.push(textLine(line));
   }
   if (model.header.phone) parts.push(textLine(model.header.phone));
   if (model.header.taxId) parts.push(textLine(`TAX: ${model.header.taxId}`));
+
+  for (const line of model.header.brandTitleLines) {
+    if (!line) continue;
+    parts.push(bytes(ESC, 0x4d, 0x01)); // font B for subtle brand line
+    parts.push(textLine(line));
+    parts.push(bytes(ESC, 0x4d, 0x00)); // back to font A
+  }
+  if (model.header.brandSupportLine) parts.push(textLine(model.header.brandSupportLine));
 
   parts.push(textLine(divider));
   parts.push(bytes(ESC, 0x61, 0x00)); // left align
@@ -572,7 +577,9 @@ async function buildEscPos(d: ThermalReceiptData) {
       parts.push(textLine(line));
     }
   }
+  parts.push(bytes(ESC, 0x4d, 0x01)); // font B (smaller)
   parts.push(textLine(model.footer.poweredByLine));
+  parts.push(bytes(ESC, 0x4d, 0x00)); // font A
   parts.push(bytes(ESC, 0x61, 0x00));
 
   // Feed extra lines so the tear/cut doesn't eat the last line.
@@ -795,22 +802,30 @@ export async function printReceiptSmart(d: ThermalReceiptData, overrides?: Print
   }
 
   if (tauriRuntime) {
-    if (printer.transport === "tcp") {
-      if (!printer.tcp_host) throw new Error("Printer IP not set for TCP transport");
-      await sendTcpDesktopViaTauri(printer.tcp_host, printer.tcp_port, escpos);
-      return;
-    }
-    if (printer.transport === "serial" || printer.transport === "bt") {
-      if (!printer.serial_port) throw new Error("Serial/COM port not set");
-      await sendSerialDesktopViaTauri(printer.serial_port, printer.serial_baud, escpos);
-      return;
-    }
-    if (printer.transport === "spooler") {
-      if (!printer.spooler_printer_name) throw new Error("Windows printer name not set");
-      await sendSpoolerDesktopViaTauri(printer.spooler_printer_name, escpos);
-      return;
-    }
     if (printer.transport === "browser") {
+      await printBrowserReceipt(d);
+      return;
+    }
+    try {
+      if (printer.transport === "tcp") {
+        if (!printer.tcp_host) throw new Error("Printer IP not set for TCP transport");
+        await sendTcpDesktopViaTauri(printer.tcp_host, printer.tcp_port, escpos);
+        return;
+      }
+      if (printer.transport === "serial" || printer.transport === "bt") {
+        if (!printer.serial_port) throw new Error("Serial/COM port not set");
+        await sendSerialDesktopViaTauri(printer.serial_port, printer.serial_baud, escpos);
+        return;
+      }
+      if (printer.transport === "spooler") {
+        if (!printer.spooler_printer_name) throw new Error("Windows printer name not set");
+        await sendSpoolerDesktopViaTauri(printer.spooler_printer_name, escpos);
+        return;
+      }
+      throw new Error(`Unsupported desktop transport '${printer.transport}'`);
+    } catch (nativeErr) {
+      if (!printer.fallback_to_browser) throw nativeErr;
+      console.warn("[print] native transport failed, falling back to browser:", nativeErr);
       await printBrowserReceipt(d);
       return;
     }

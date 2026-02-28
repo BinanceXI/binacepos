@@ -110,7 +110,7 @@ interface POSContextType {
   can: (permission: keyof UserPermissions) => boolean;
 
   cart: CartItem[];
-  addToCart: (product: Product, customDescription?: string, customPrice?: number) => void;
+  addToCart: (product: Product, customDescription?: string, customPrice?: number) => boolean;
   removeFromCart: (lineId: string) => void;
   updateCartItemQuantity: (lineId: string, quantity: number) => void;
   updateCartItemCustom: (lineId: string, customDescription?: string, customPrice?: number) => void;
@@ -310,6 +310,74 @@ async function insertOrderWithSaleTypeFallback(
     if (error) throw error;
   }
 };
+
+type StockRequestRow = {
+  productId: string;
+  productName: string;
+  requestedQty: number;
+};
+
+function aggregateGoodsRequests(items: CartItem[]) {
+  const reqByProduct = new Map<string, StockRequestRow>();
+  for (const item of items || []) {
+    if ((item as any)?.product?.type !== "good") continue;
+    const productId = String((item as any)?.product?.id || "").trim();
+    if (!productId) continue;
+    const requestedQty = Math.max(0, Math.floor(Number((item as any)?.quantity || 0)));
+    if (requestedQty <= 0) continue;
+
+    const existing = reqByProduct.get(productId);
+    if (!existing) {
+      reqByProduct.set(productId, {
+        productId,
+        productName: String((item as any)?.product?.name || "Item"),
+        requestedQty,
+      });
+      continue;
+    }
+    existing.requestedQty += requestedQty;
+  }
+  return Array.from(reqByProduct.values());
+}
+
+async function ensureStockAvailableForItems(items: CartItem[]) {
+  const requested = aggregateGoodsRequests(items);
+  if (!requested.length) return;
+
+  const productIds = requested.map((r) => r.productId);
+  const { data, error } = await supabase
+    .from("products")
+    .select("id, name, stock_quantity")
+    .in("id", productIds);
+  if (error) throw error;
+
+  const stockByProductId = new Map<string, { name: string; stock: number }>();
+  for (const row of data || []) {
+    const id = String((row as any)?.id || "").trim();
+    if (!id) continue;
+    stockByProductId.set(id, {
+      name: String((row as any)?.name || "Item"),
+      stock: Math.max(0, Math.floor(Number((row as any)?.stock_quantity ?? 0))),
+    });
+  }
+
+  for (const req of requested) {
+    const row = stockByProductId.get(req.productId);
+    if (!row) {
+      throw new Error(`Insufficient stock: ${req.productName} is not available in this tenant.`);
+    }
+    if (row.stock < req.requestedQty) {
+      throw new Error(
+        `Insufficient stock: ${row.name} has ${row.stock}, requested ${req.requestedQty}.`
+      );
+    }
+  }
+}
+
+function isInsufficientStockError(err: any) {
+  const msg = String(err?.message || "").toLowerCase();
+  return msg.includes("insufficient stock");
+}
 
 /* ------------------------------- PROVIDER ---------------------------------- */
 
@@ -530,7 +598,6 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
 
     try {
       const failed: OfflineSale[] = [];
-      let stockErrors = 0;
 
       for (const sale of queue) {
         try {
@@ -620,12 +687,7 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
           );
           if (itemsErr) throw itemsErr;
 
-          try {
-            await decrementStockForItems(saleItems);
-          } catch (e) {
-            stockErrors += 1;
-            console.error("Stock decrement failed during offline sale sync", e);
-          }
+          await decrementStockForItems(saleItems);
           await invalidateSalesQueries();
         } catch (e: any) {
           failed.push({ ...sale, lastError: errorToMessage(e) });
@@ -637,15 +699,12 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
       if (failed.length) {
         setSyncStatus("error");
         if (!silent) toast.error(`${failed.length} sales failed to sync`);
-      } else if (stockErrors > 0) {
-        setSyncStatus("error");
-        if (!silent) toast.warning(`Synced sales, but ${stockErrors} stock updates failed`);
       } else {
         setSyncStatus("online");
         if (!silent) toast.success("All offline sales synced");
       }
 
-      return { failed: failed.length, stockErrors };
+      return { failed: failed.length, stockErrors: 0 };
     } finally {
       if (toastId != null) toast.dismiss(toastId);
       syncingRef.current = false;
@@ -799,6 +858,18 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
   /* ------------------------------- CART LOGIC ------------------------------- */
 
   const addToCart = (product: Product, desc?: string, price?: number) => {
+    const productName = String((product as any)?.name || "Item");
+    const availableStock = Math.max(
+      0,
+      Math.floor(Number((product as any)?.stock_quantity ?? (product as any)?.stock ?? 0))
+    );
+
+    if ((product as any)?.type === "good" && availableStock <= 0) {
+      toast.error(`${productName} is out of stock`);
+      return false;
+    }
+
+    let limitReached = false;
     setCart((prev) => {
       const custom = (product as any).type === "service" && (desc || price !== undefined);
       if (custom) {
@@ -824,6 +895,10 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
       );
 
       if (existing) {
+        if ((product as any)?.type === "good" && Number((existing as any).quantity || 0) >= availableStock) {
+          limitReached = true;
+          return prev;
+        }
         return prev.map((i: any) =>
           i.lineId === (existing as any).lineId ? { ...i, quantity: Number(i.quantity) + 1 } : i
         );
@@ -840,13 +915,54 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
         } as any,
       ];
     });
+
+    if (limitReached) {
+      toast.error(`Stock limit reached for ${productName} (${availableStock} available)`);
+      return false;
+    }
+    return true;
   };
 
   const removeFromCart = (id: string) => setCart((prev) => prev.filter((i: any) => i.lineId !== id));
 
   const updateCartItemQuantity = (id: string, qty: number) => {
     if (qty <= 0) return removeFromCart(id);
-    setCart((prev) => prev.map((i: any) => (i.lineId === id ? { ...i, quantity: qty } : i)));
+
+    let limitedTo = 0;
+    let limitedName = "";
+    setCart((prev) => {
+      const next: CartItem[] = [];
+      for (const raw of prev as any[]) {
+        if (raw.lineId !== id) {
+          next.push(raw);
+          continue;
+        }
+
+        const current = Math.max(0, Math.floor(Number(qty) || 0));
+        if ((raw as any)?.product?.type !== "good") {
+          next.push({ ...raw, quantity: current });
+          continue;
+        }
+
+        const available = Math.max(
+          0,
+          Math.floor(Number((raw as any)?.product?.stock_quantity ?? (raw as any)?.product?.stock ?? 0))
+        );
+        if (current <= available && available > 0) {
+          next.push({ ...raw, quantity: current });
+          continue;
+        }
+
+        limitedTo = available;
+        limitedName = String((raw as any)?.product?.name || "Item");
+        if (available > 0) next.push({ ...raw, quantity: available });
+      }
+      return next;
+    });
+
+    if (limitedName) {
+      toast.error(`Stock limit reached for ${limitedName} (${limitedTo} available)`);
+    }
   };
 
   const updateCartItemCustom = (id: string, desc?: string, price?: number) => {
@@ -952,6 +1068,8 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
 
     if (navigator.onLine) {
       const insertOnline = async () => {
+        await ensureStockAvailableForItems(saleItems);
+
         const { data: authUserRes } = await supabase.auth.getUser();
         const cashierId = authUserRes?.user?.id;
 
@@ -1013,34 +1131,32 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
 
         if (itemsErr) throw itemsErr;
 
-        let stockOk = true;
-        try {
-          await decrementStockForItems(saleItems);
-        } catch (e) {
-          stockOk = false;
-          console.error("Stock decrement failed after saving order/items", e);
-        }
+        await decrementStockForItems(saleItems);
 
         await invalidateSalesQueries();
-        return { stockOk };
+        return { ok: true as const };
       };
 
       try {
-        const res = await insertOnline();
-        if (res.stockOk) toast.success("Sale saved & synced");
-        else toast.warning("Sale saved, but stock update failed");
+        await insertOnline();
+        toast.success("Sale saved & synced");
         return;
       } catch (e: any) {
         let msg = errorToMessage(e);
+
+        if (isInsufficientStockError(e)) {
+          saveToOfflineQueue({ ...saleData, lastError: msg });
+          toast.warning("Insufficient stock — sale kept pending for reconciliation");
+          return;
+        }
 
         // If we failed due to missing/expired auth, refresh session and retry once.
         try {
           const sessionRes = await ensureSupabaseSession();
           if (sessionRes.ok) {
             try {
-              const res = await insertOnline();
-              if (res.stockOk) toast.success("Sale saved & synced");
-              else toast.warning("Sale saved, but stock update failed");
+              await insertOnline();
+              toast.success("Sale saved & synced");
               return;
             } catch (e2: any) {
               msg = errorToMessage(e2);
