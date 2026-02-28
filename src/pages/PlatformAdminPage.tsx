@@ -586,6 +586,7 @@ export function PlatformAdminPage() {
         allowVoid: true,
         allowPriceEdit: true,
         allowDiscount: true,
+        allowServiceBookings: true,
         allowReports: true,
         allowInventory: true,
         allowSettings: true,
@@ -2297,4 +2298,3 @@ export function PlatformAdminPage() {
     </div>
   );
 }
-

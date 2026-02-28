@@ -128,7 +128,6 @@ function runStaticChecks() {
       /\.select\("role,\s*active,\s*business_id"\)/.test(text),
       `${fn} is missing caller business_id role check projection.`
     );
-    assert(/Not available in demo/.test(text), `${fn} is missing demo-tenant guard.`);
   }
 
   const uploadFn = read("supabase/functions/upload_product_image/index.ts");

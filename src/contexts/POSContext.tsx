@@ -25,13 +25,14 @@ import {
 } from "@/lib/serviceBookings";
 
 /* ---------------------------------- USER TYPES --------------------------------- */
-export type Role = "platform_admin" | "admin" | "cashier";
+export type Role = "platform_admin" | "master_admin" | "super_admin" | "admin" | "cashier";
 
 export type UserPermissions = {
   allowRefunds: boolean;
   allowVoid: boolean;
   allowPriceEdit: boolean;
   allowDiscount: boolean;
+  allowServiceBookings: boolean;
   allowReports: boolean;
   allowInventory: boolean;
   allowSettings: boolean;
@@ -56,18 +57,19 @@ export const ADMIN_PERMISSIONS: UserPermissions = {
   allowVoid: true,
   allowPriceEdit: true,
   allowDiscount: true,
+  allowServiceBookings: true,
   allowReports: true,
   allowInventory: true,
   allowSettings: true,
   allowEditReceipt: true,
 };
 
-// ✅ FIX: cashier must be able to discount if you want discounts to work at the till
 export const CASHIER_DEFAULT_PERMISSIONS: UserPermissions = {
   allowRefunds: false,
   allowVoid: false,
   allowPriceEdit: false,
-  allowDiscount: true, // ✅ was false (this blocked discounts)
+  allowDiscount: false,
+  allowServiceBookings: false,
   allowReports: false,
   allowInventory: false,
   allowSettings: false,
@@ -859,7 +861,6 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
     );
   };
 
-  // ✅ IMPORTANT: this is what POSPage will call — and it WILL work now (cashier has allowDiscount=true)
   const updateCartItemDiscount = (id: string, discount: number, type: "percentage" | "fixed") => {
     if (!can("allowDiscount")) {
       toast.error("Not allowed to apply discounts");

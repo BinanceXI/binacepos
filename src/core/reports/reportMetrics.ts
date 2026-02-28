@@ -13,8 +13,11 @@ export type OrderItemRow = {
 
 export type OrderRow = {
   id: string;
+  receipt_id?: string | null;
+  receipt_number?: string | null;
   total_amount: number;
   payment_method: string | null;
+  status?: string | null;
   created_at: string;
   cashier_id?: string | null;
   sale_type?: string | null;
@@ -69,8 +72,11 @@ export function offlineQueueToOrders(scope: TenantScope): OrderRow[] {
 
       return {
         id: String(sale?.meta?.receiptId || `offline-${created_at}`),
+        receipt_id: String(sale?.meta?.receiptId || ""),
+        receipt_number: String(sale?.meta?.receiptNumber || ""),
         total_amount: Number(sale?.total || 0),
         payment_method: String(sale?.payments?.[0]?.method || "cash"),
+        status: "completed",
         created_at,
         sale_type: saleType,
         booking_id: bookingId ? String(bookingId) : null,
@@ -188,4 +194,3 @@ export function calculateSalesStats(salesData: OrderRow[], rangeType: SalesRange
     topCashiers,
   };
 }
-

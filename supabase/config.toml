@@ -50,17 +50,38 @@ verify_jwt = false
 import_map = "./functions/impersonate_business/deno.json"
 entrypoint = "./functions/impersonate_business/index.ts"
 
-# Live demo provisioning (public endpoint).
-# Enable this in production ONLY if you want the marketing-site demo to provision real demo tenants in the same project.
-# Otherwise, keep it disabled and run demos in a separate Supabase project.
-[functions.create_demo_session]
+[functions.fiscal_profile]
 enabled = true
-verify_jwt = false
-import_map = "./functions/create_demo_session/deno.json"
-entrypoint = "./functions/create_demo_session/index.ts"
+verify_jwt = true
+import_map = "./functions/fiscal_profile/deno.json"
+entrypoint = "./functions/fiscal_profile/index.ts"
 
-[functions.cleanup_demo_sessions]
+[functions.fdms_health]
+enabled = true
+verify_jwt = true
+import_map = "./functions/fdms_health/deno.json"
+entrypoint = "./functions/fdms_health/index.ts"
+
+[functions.fiscal_credentials]
+enabled = true
+verify_jwt = true
+import_map = "./functions/fiscal_credentials/deno.json"
+entrypoint = "./functions/fiscal_credentials/index.ts"
+
+[functions.fiscal_devices]
+enabled = true
+verify_jwt = true
+import_map = "./functions/fiscal_devices/deno.json"
+entrypoint = "./functions/fiscal_devices/index.ts"
+
+[functions.fiscal_submissions]
+enabled = true
+verify_jwt = true
+import_map = "./functions/fiscal_submissions/deno.json"
+entrypoint = "./functions/fiscal_submissions/index.ts"
+
+[functions.fdms_worker]
 enabled = true
 verify_jwt = false
-import_map = "./functions/cleanup_demo_sessions/deno.json"
-entrypoint = "./functions/cleanup_demo_sessions/index.ts"
+import_map = "./functions/fdms_worker/deno.json"
+entrypoint = "./functions/fdms_worker/index.ts"

@@ -26,6 +26,15 @@ type CallerRow = {
   business_id: string | null;
 };
 
+function normalizeRole(role: unknown) {
+  return String(role || "").trim().toLowerCase();
+}
+
+function isPlatformLikeRole(role: unknown) {
+  const r = normalizeRole(role);
+  return r === "platform_admin" || r === "master_admin" || r === "super_admin";
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json(405, { error: "Method not allowed" });
@@ -58,7 +67,7 @@ serve(async (req) => {
     if (!caller || caller.active === false) return json(403, { error: "Account disabled" });
 
     const callerRow = caller as CallerRow;
-    if (callerRow.role !== "platform_admin") return json(403, { error: "Platform admins only" });
+    if (!isPlatformLikeRole(callerRow.role)) return json(403, { error: "Platform admins only" });
 
     const body = await req.json().catch(() => ({} as any));
     const business_id = String(body?.business_id || "").trim();
@@ -116,6 +125,7 @@ serve(async (req) => {
               allowVoid: true,
               allowPriceEdit: true,
               allowDiscount: true,
+              allowServiceBookings: true,
               allowReports: true,
               allowInventory: true,
               allowSettings: true,
@@ -125,7 +135,8 @@ serve(async (req) => {
               allowRefunds: false,
               allowVoid: false,
               allowPriceEdit: false,
-              allowDiscount: true,
+              allowDiscount: false,
+              allowServiceBookings: false,
               allowReports: false,
               allowInventory: false,
               allowSettings: false,

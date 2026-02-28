@@ -3,7 +3,6 @@ import { supabase } from "@/lib/supabase";
 import { usePOS } from "@/contexts/POSContext";
 import { BRAND } from "@/lib/brand";
 import { secureTime } from "@/lib/secureTime";
-import { clearClientIndexedDb, clearClientStorage } from "@/lib/sessionCleanup";
 import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -51,9 +50,8 @@ type BillingCache = {
 };
 
 const BILLING_CACHE_PREFIX = "binancexi_billing_cache_v1:";
-const DEMO_EXPIRES_KEY = "binancexi_demo_expires_at";
 const ACTIVATION_BYPASS_ROLES = new Set(["platform_admin", "master_admin", "super_admin"]);
-const TEMP_DISABLE_ACTIVATION_LOCK = true;
+const TEMP_DISABLE_ACTIVATION_LOCK = false;
 
 function normalizeRole(role: unknown) {
   return String(role || "").trim().toLowerCase();
@@ -106,7 +104,7 @@ function computeState(
 
 export function SubscriptionGate({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient();
-  const { currentUser, setCurrentUser } = usePOS();
+  const { currentUser } = usePOS();
 
   const role = (currentUser as any)?.role;
   const roleNormalized = normalizeRole(role);
@@ -121,7 +119,6 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
   const [requestMessage, setRequestMessage] = useState("");
   const [requestingActivation, setRequestingActivation] = useState(false);
   const [clockTick, setClockTick] = useState(0);
-  const [forcingDemoExpiry, setForcingDemoExpiry] = useState(false);
 
   // Enforce lock as time passes even if the page stays open (especially offline).
   useEffect(() => {
@@ -225,62 +222,7 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
   // eslint-disable-next-line @typescript-eslint/no-unused-expressions
   clockTick;
   const nowMs = secureTime.timestamp();
-  let demoExpiresAtRaw: string | null = null;
-  if (typeof window !== "undefined") {
-    try {
-      demoExpiresAtRaw = localStorage.getItem(DEMO_EXPIRES_KEY);
-    } catch {
-      demoExpiresAtRaw = null;
-    }
-  }
-  const demoExpiresAtMs = demoExpiresAtRaw ? Date.parse(demoExpiresAtRaw) : NaN;
-  const demoExpired = Number.isFinite(demoExpiresAtMs) ? nowMs >= demoExpiresAtMs : false;
   const state: AccessState = computeState(data?.billing ?? null, data?.businessStatus ?? null, nowMs);
-
-  useEffect(() => {
-    if (!currentUser) return;
-    if (!roleResolved) return;
-    if (bypassActivationGate) return;
-    if (!demoExpired) return;
-    if (forcingDemoExpiry) return;
-
-    let cancelled = false;
-    setForcingDemoExpiry(true);
-
-    const run = async () => {
-      toast.error("Demo expired. Start a new demo session.");
-
-      try {
-        await supabase.auth.signOut();
-      } catch {
-        // ignore
-      }
-
-      clearClientStorage({ includeDemoExpires: true });
-      await clearClientIndexedDb();
-
-      if (cancelled) return;
-
-      setCurrentUser(null);
-      qc.clear();
-      window.location.assign("/?demo=1");
-    };
-
-    void run();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    currentUser,
-    currentUser?.id,
-    roleResolved,
-    bypassActivationGate,
-    demoExpired,
-    forcingDemoExpiry,
-    qc,
-    setCurrentUser,
-  ]);
 
   const gateDecision =
     bypassActivationGate
@@ -289,17 +231,15 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
         ? "allow_locked_temp_bypass"
       : !roleResolved
         ? "wait_role_resolution"
-        : demoExpired || forcingDemoExpiry
-          ? "demo_expired"
-          : !businessId
-            ? "missing_business_id"
-            : isFetching
-              ? "loading"
-              : error && !data?.billing
-                ? "error"
-                : state !== "locked"
-                  ? "allow"
-                  : "locked";
+        : !businessId
+          ? "missing_business_id"
+          : isFetching
+            ? "loading"
+            : error && !data?.billing
+              ? "error"
+              : state !== "locked"
+                ? "allow"
+                : "locked";
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -329,30 +269,6 @@ export function SubscriptionGate({ children }: { children: React.ReactNode }) {
     return (
       <div className="min-h-[70vh] flex items-center justify-center p-6">
         <div className="text-sm text-muted-foreground">Resolving access...</div>
-      </div>
-    );
-  }
-
-  if (demoExpired || forcingDemoExpiry) {
-    return (
-      <div className="min-h-[70vh] flex items-center justify-center p-6">
-        <Card className="max-w-lg w-full shadow-card">
-          <CardHeader>
-            <CardTitle>Demo Expired</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="text-sm text-muted-foreground">
-              Demo expired. Start a new demo session.
-            </div>
-            <Button
-              className="w-full"
-              onClick={() => window.location.assign("/?demo=1")}
-              disabled={forcingDemoExpiry}
-            >
-              {forcingDemoExpiry ? "Signing out..." : "Start New Demo"}
-            </Button>
-          </CardContent>
-        </Card>
       </div>
     );
   }

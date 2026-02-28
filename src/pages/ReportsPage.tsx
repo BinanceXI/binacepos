@@ -16,6 +16,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
+import { Badge } from '@/components/ui/badge';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast } from 'sonner';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar 
@@ -24,7 +26,7 @@ import { cn } from '@/lib/utils';
 import { usePOS } from '@/contexts/POSContext';
 import { listExpenses } from '@/lib/expenses';
 import { listLocalServiceBookings, type LocalServiceBooking } from '@/lib/serviceBookings';
-import { resolveTenantScope, tenantScopeKey } from '@/lib/tenantScope';
+import { readScopedJSON, resolveTenantScope, tenantScopeKey, writeScopedJSON } from '@/lib/tenantScope';
 import { isLikelyAuthError } from '@/lib/supabaseSession';
 import {
   calculateMonthExpenseTotals,
@@ -49,8 +51,11 @@ async function fetchOrdersRemote(startISO: string, endISO: string): Promise<Orde
     .select(
       `
         id,
+        receipt_id,
+        receipt_number,
         total_amount,
         payment_method,
+        status,
         created_at,
         cashier_id,
         sale_type,
@@ -75,8 +80,11 @@ async function fetchOrdersRemote(startISO: string, endISO: string): Promise<Orde
     .select(
       `
         id,
+        receipt_id,
+        receipt_number,
         total_amount,
         payment_method,
+        status,
         created_at,
         cashier_id,
         sale_type,
@@ -100,8 +108,11 @@ async function fetchOrdersRemote(startISO: string, endISO: string): Promise<Orde
       .select(
         `
           id,
+          receipt_id,
+          receipt_number,
           total_amount,
           payment_method,
+          status,
           created_at,
           cashier_id,
           sale_type,
@@ -149,8 +160,22 @@ async function fetchOrdersRemote(startISO: string, endISO: string): Promise<Orde
   })) as OrderRow[];
 }
 
+function normalizePaymentMethod(raw: string | null | undefined) {
+  const method = String(raw || "cash").trim().toLowerCase();
+  if (method.includes("card") || method.includes("swipe") || method.includes("pos")) return "card";
+  if (method.includes("eco") || method.includes("mobile")) return "ecocash";
+  return "cash";
+}
+
+function normalizeStatus(raw: string | null | undefined) {
+  return String(raw || "completed").trim().toLowerCase();
+}
+
 export const ReportsPage = () => {
   const { currentUser } = usePOS();
+  const isAdmin = String(currentUser?.role || "").toLowerCase() === "admin";
+  const staffSelfId = String(currentUser?.id || "");
+  const REPORT_PREFS_KEY = "binancexi_reports_prefs_v1";
   const scope = useMemo(
     () =>
       resolveTenantScope(
@@ -166,11 +191,24 @@ export const ReportsPage = () => {
   const scopeKey = useMemo(() => tenantScopeKey(scope) || "global", [scope?.businessId, scope?.userId]);
 
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
-  const [rangeType, setRangeType] = useState<'today' | 'week' | 'month' | 'year' | 'custom'>('today');
-  const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined }>({
-    from: new Date(),
-    to: new Date(),
-  });
+  const reportPrefs = useMemo(
+    () =>
+      readScopedJSON<{
+        rangeType?: 'today' | 'week' | 'month' | 'year' | 'custom';
+        from?: string;
+        to?: string;
+        staffFilter?: string;
+      }>(REPORT_PREFS_KEY, {}, { scope, migrateLegacy: true }),
+    [scope?.businessId, scope?.userId]
+  );
+  const [rangeType, setRangeType] = useState<'today' | 'week' | 'month' | 'year' | 'custom'>(
+    reportPrefs.rangeType || 'today'
+  );
+  const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined }>(() => ({
+    from: reportPrefs.from ? new Date(reportPrefs.from) : new Date(),
+    to: reportPrefs.to ? new Date(reportPrefs.to) : new Date(),
+  }));
+  const [staffFilter, setStaffFilter] = useState<string>(reportPrefs.staffFilter || "all");
   const [offlineBanner, setOfflineBanner] = useState<string | null>(null);
 
   const updateOfflineBanner = useCallback((next: string | null) => {
@@ -187,6 +225,44 @@ export const ReportsPage = () => {
       window.removeEventListener('offline', onOff);
     };
   }, []);
+
+  const { data: staffOptions = [] } = useQuery({
+    queryKey: ["reportsStaffOptions", scopeKey],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, full_name, role, active")
+        .eq("active", true)
+        .in("role", ["admin", "cashier"])
+        .order("full_name", { ascending: true });
+      if (error) throw error;
+      return (data || []) as Array<{ id: string; full_name: string | null; role: string | null; active: boolean | null }>;
+    },
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
+  });
+
+  useEffect(() => {
+    if (isAdmin) {
+      setStaffFilter((prev) => (prev ? prev : "all"));
+      return;
+    }
+    if (staffSelfId) setStaffFilter(staffSelfId);
+  }, [isAdmin, staffSelfId]);
+
+  useEffect(() => {
+    writeScopedJSON(
+      REPORT_PREFS_KEY,
+      {
+        rangeType,
+        from: dateRange.from?.toISOString() || null,
+        to: dateRange.to?.toISOString() || null,
+        staffFilter,
+      },
+      { scope }
+    );
+  }, [scope?.businessId, scope?.userId, rangeType, dateRange.from, dateRange.to, staffFilter]);
 
   // --- P4 Widget: This month (Revenue vs Expenses) ---
   const monthRange = useMemo(() => {
@@ -337,33 +413,107 @@ export const ReportsPage = () => {
     staleTime: 1000 * 60 * 5 // Cache for 5 mins
   });
 
+  const effectiveStaffFilter = isAdmin ? staffFilter : staffSelfId;
+  const filteredSalesData = useMemo(() => {
+    const rows = (salesData as OrderRow[]) || [];
+    if (!effectiveStaffFilter || effectiveStaffFilter === "all") return rows;
+    return rows.filter((row) => String(row.cashier_id || "") === effectiveStaffFilter);
+  }, [salesData, effectiveStaffFilter]);
+
   // --- 2. CALCULATE METRICS ---
   const stats = useMemo(
-    () => calculateSalesStats(salesData as OrderRow[], rangeType as SalesRangeType),
-    [salesData, rangeType]
+    () => calculateSalesStats(filteredSalesData as OrderRow[], rangeType as SalesRangeType),
+    [filteredSalesData, rangeType]
   );
 
-  const handleExportPDF = () => {
-    // Simple CSV Export logic for now (Robust PDF usually requires heavy libraries)
+  const staffDrilldown = useMemo(() => {
+    let grossSales = 0;
+    let voidCount = 0;
+    let voidAmount = 0;
+    let refundCount = 0;
+    let refundAmount = 0;
+    let serviceRevenue = 0;
+    let serviceCompletions = 0;
+
+    const paymentSplit = { cash: 0, card: 0, ecocash: 0 };
+
+    for (const row of filteredSalesData as OrderRow[]) {
+      const amount = Number((row as any)?.total_amount || 0);
+      const status = normalizeStatus((row as any)?.status);
+      const paymentMethod = normalizePaymentMethod((row as any)?.payment_method);
+
+      grossSales += amount;
+
+      if (status.includes("void")) {
+        voidCount += 1;
+        voidAmount += amount;
+        continue;
+      }
+      if (status.includes("refund")) {
+        refundCount += 1;
+        refundAmount += amount;
+        continue;
+      }
+
+      paymentSplit[paymentMethod] += amount;
+      if (String((row as any)?.sale_type || "") === "service") {
+        serviceRevenue += amount;
+        if ((row as any)?.booking_id) serviceCompletions += 1;
+      }
+    }
+
+    const netSales = grossSales - voidAmount - refundAmount;
+    const transactions = filteredSalesData.length;
+    const avgTicket = transactions > 0 ? netSales / transactions : 0;
+
+    return {
+      grossSales,
+      netSales,
+      transactions,
+      avgTicket,
+      voidCount,
+      voidAmount,
+      refundCount,
+      refundAmount,
+      serviceRevenue,
+      serviceCompletions,
+      paymentSplit,
+    };
+  }, [filteredSalesData]);
+
+  const receiptRows = useMemo(
+    () =>
+      [...(filteredSalesData as OrderRow[])].sort((a, b) =>
+        String((b as any).created_at).localeCompare(String((a as any).created_at))
+      ),
+    [filteredSalesData]
+  );
+
+  const handleExportCSV = () => {
     const csvContent = [
-      ["Date", "Receipt ID", "Total", "Method", "Cashier"],
-      ...salesData.map((o: any) => [
-        format(parseISO(o.created_at), 'yyyy-MM-dd HH:mm'),
-        o.id,
-        o.total_amount,
-        o.payment_method,
-        o.profiles?.full_name || 'Unknown'
-      ])
-    ].map(e => e.join(",")).join("\n");
+      ["Date", "Receipt Number", "Receipt ID", "Cashier", "Total", "Method", "Status", "Sale Type"],
+      ...receiptRows.map((o: any) => [
+        format(parseISO(o.created_at), "yyyy-MM-dd HH:mm"),
+        o.receipt_number || "",
+        o.receipt_id || o.id,
+        o.profiles?.full_name || "Unknown",
+        Number(o.total_amount || 0).toFixed(2),
+        o.payment_method || "cash",
+        o.status || "completed",
+        o.sale_type || "product",
+      ]),
+    ]
+      .map((entry) => entry.join(","))
+      .join("\n");
 
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `sales_report_${rangeType}.csv`);
+    link.setAttribute("download", `staff_report_${rangeType}_${effectiveStaffFilter || "all"}.csv`);
     document.body.appendChild(link);
     link.click();
-    toast.success("Report Downloaded");
+    toast.success("Report downloaded");
   };
 
   if (isLoading) return <div className="flex h-screen items-center justify-center"><Loader2 className="animate-spin h-8 w-8 text-primary"/></div>;
@@ -394,6 +544,27 @@ export const ReportsPage = () => {
             </SelectContent>
           </Select>
 
+          {isAdmin ? (
+            <Select value={staffFilter} onValueChange={setStaffFilter}>
+              <SelectTrigger className="w-[220px] bg-card h-9">
+                <Users className="w-4 h-4 mr-2 text-muted-foreground" />
+                <SelectValue placeholder="All staff" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Staff</SelectItem>
+                {staffOptions.map((staff) => (
+                  <SelectItem key={staff.id} value={staff.id}>
+                    {staff.full_name || "Staff"} ({String(staff.role || "cashier")})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <Badge variant="outline" className="h-9 px-3 inline-flex items-center gap-2">
+              <Users className="w-4 h-4" /> My Sales Only
+            </Badge>
+          )}
+
           {/* Custom Date Picker */}
           {rangeType === 'custom' && (
             <Popover>
@@ -423,7 +594,7 @@ export const ReportsPage = () => {
             </Popover>
           )}
 
-          <Button variant="outline" className="gap-2 h-9" onClick={handleExportPDF}>
+          <Button variant="outline" className="gap-2 h-9" onClick={handleExportCSV}>
             <Download className="w-4 h-4" />
             <span className="hidden sm:inline">Export</span>
           </Button>
@@ -505,6 +676,50 @@ export const ReportsPage = () => {
 	          </div>
 	        </CardContent>
 	      </Card>
+
+      <Card className="border-border/50 shadow-sm">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base font-semibold">Staff Drilldown</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
+            <div className="rounded-xl border bg-card p-3">
+              <div className="text-xs text-muted-foreground">Gross Sales</div>
+              <div className="text-lg font-bold">${staffDrilldown.grossSales.toFixed(2)}</div>
+            </div>
+            <div className="rounded-xl border bg-card p-3">
+              <div className="text-xs text-muted-foreground">Net Sales</div>
+              <div className="text-lg font-bold">${staffDrilldown.netSales.toFixed(2)}</div>
+            </div>
+            <div className="rounded-xl border bg-card p-3">
+              <div className="text-xs text-muted-foreground">Transactions</div>
+              <div className="text-lg font-bold">{staffDrilldown.transactions}</div>
+            </div>
+            <div className="rounded-xl border bg-card p-3">
+              <div className="text-xs text-muted-foreground">Avg Ticket</div>
+              <div className="text-lg font-bold">${staffDrilldown.avgTicket.toFixed(2)}</div>
+            </div>
+            <div className="rounded-xl border bg-card p-3">
+              <div className="text-xs text-muted-foreground">Voided</div>
+              <div className="text-lg font-bold">{staffDrilldown.voidCount}</div>
+              <div className="text-[11px] text-muted-foreground">${staffDrilldown.voidAmount.toFixed(2)}</div>
+            </div>
+            <div className="rounded-xl border bg-card p-3">
+              <div className="text-xs text-muted-foreground">Refunded</div>
+              <div className="text-lg font-bold">{staffDrilldown.refundCount}</div>
+              <div className="text-[11px] text-muted-foreground">${staffDrilldown.refundAmount.toFixed(2)}</div>
+            </div>
+            <div className="rounded-xl border bg-card p-3">
+              <div className="text-xs text-muted-foreground">Service Revenue</div>
+              <div className="text-lg font-bold">${staffDrilldown.serviceRevenue.toFixed(2)}</div>
+            </div>
+            <div className="rounded-xl border bg-card p-3">
+              <div className="text-xs text-muted-foreground">Service Completions</div>
+              <div className="text-lg font-bold">{staffDrilldown.serviceCompletions}</div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
 	      {/* KPI STATS */}
 	      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
@@ -625,17 +840,17 @@ export const ReportsPage = () => {
               <div className="p-4 rounded-xl bg-primary/10 border border-primary/20 text-center">
                 <Banknote className="w-6 h-6 mx-auto mb-2 text-primary" />
                 <p className="text-xs text-muted-foreground uppercase">Cash</p>
-                <p className="text-lg font-bold text-primary">${stats.paymentMethods.cash.toFixed(0)}</p>
+                <p className="text-lg font-bold text-primary">${staffDrilldown.paymentSplit.cash.toFixed(2)}</p>
               </div>
               <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20 text-center">
                 <CreditCard className="w-6 h-6 mx-auto mb-2 text-blue-500" />
                 <p className="text-xs text-muted-foreground uppercase">Card</p>
-                <p className="text-lg font-bold text-blue-500">${stats.paymentMethods.card.toFixed(0)}</p>
+                <p className="text-lg font-bold text-blue-500">${staffDrilldown.paymentSplit.card.toFixed(2)}</p>
               </div>
               <div className="p-4 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-center">
                 <Smartphone className="w-6 h-6 mx-auto mb-2 text-indigo-500" />
                 <p className="text-xs text-muted-foreground uppercase">EcoCash</p>
-                <p className="text-lg font-bold text-indigo-500">${stats.paymentMethods.ecocash.toFixed(0)}</p>
+                <p className="text-lg font-bold text-indigo-500">${staffDrilldown.paymentSplit.ecocash.toFixed(2)}</p>
               </div>
             </div>
           </CardContent>
@@ -663,6 +878,65 @@ export const ReportsPage = () => {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="shadow-sm border-border/50">
+        <CardHeader>
+          <CardTitle className="text-base font-semibold">Receipt Drilldown</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>Receipt</TableHead>
+                <TableHead>Cashier</TableHead>
+                <TableHead>Method</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Total</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {receiptRows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground">
+                    No receipts in this filter.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                receiptRows.slice(0, 200).map((row: any) => {
+                  const status = normalizeStatus(row.status);
+                  return (
+                    <TableRow key={row.id}>
+                      <TableCell className="text-xs">
+                        {format(parseISO(row.created_at), "yyyy-MM-dd HH:mm")}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {row.receipt_number || row.receipt_id || row.id}
+                      </TableCell>
+                      <TableCell>{row.profiles?.full_name || "Staff"}</TableCell>
+                      <TableCell className="capitalize">{normalizePaymentMethod(row.payment_method)}</TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={
+                            status.includes("void") || status.includes("refund")
+                              ? "destructive"
+                              : "secondary"
+                          }
+                        >
+                          {row.status || "completed"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right font-medium">
+                        ${Number(row.total_amount || 0).toFixed(2)}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   );
 };

@@ -31,7 +31,6 @@ import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 import { FeedbackDialog } from "@/components/feedback/FeedbackDialog";
 import { flushFeedbackQueue, getQueuedFeedbackCount } from "@/lib/feedbackQueue";
-import { demoEntryPath, isDemoEntry } from "@/lib/demoEntry";
 import { clearClientIndexedDb, clearClientStorage } from "@/lib/sessionCleanup";
 import { isPlatformLikeRole } from "@/lib/roles";
 
@@ -52,7 +51,6 @@ type ImpersonationInfo = {
 const IMPERSONATION_BACKUP_KEY = "platform_admin_session_backup_v1";
 const IMPERSONATION_INFO_KEY = "platform_admin_impersonation_v1";
 const REACT_QUERY_PERSIST_KEY = "REACT_QUERY_OFFLINE_CACHE";
-const DEMO_EXPIRES_KEY = "binancexi_demo_expires_at";
 
 function safeJSONParse<T>(raw: string | null): T | null {
   if (!raw) return null;
@@ -92,31 +90,6 @@ export const TopBar = () => {
       !isPlatformLikeRole((currentUser as any)?.role)
   );
   const [returning, setReturning] = useState(false);
-
-  const demoExpiresAt = useMemo(() => {
-    return safeGetItem(DEMO_EXPIRES_KEY);
-  }, []);
-
-  useEffect(() => {
-    if (!demoExpiresAt) return;
-    const ts = Date.parse(demoExpiresAt);
-    if (!Number.isFinite(ts) || ts <= Date.now()) {
-      try {
-        localStorage.removeItem(DEMO_EXPIRES_KEY);
-      } catch {
-        // ignore
-      }
-    }
-  }, [demoExpiresAt]);
-
-  const demoBanner = useMemo(() => {
-    if (!demoExpiresAt) return null;
-    const ts = Date.parse(demoExpiresAt);
-    if (!Number.isFinite(ts)) return null;
-    const msLeft = ts - Date.now();
-    if (msLeft <= 0) return null;
-    return { ts, msLeft };
-  }, [demoExpiresAt]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -170,8 +143,6 @@ export const TopBar = () => {
   };
 
   const handleLogout = async () => {
-    const redirectTo = isDemoEntry() ? demoEntryPath() : "/";
-
     try {
       // Kill Supabase session (if online)
       await supabase.auth.signOut();
@@ -180,14 +151,14 @@ export const TopBar = () => {
     }
 
     // Always clear local user + scoped tenant caches (offline-first).
-    clearClientStorage({ includeDemoExpires: true });
+    clearClientStorage();
     await clearClientIndexedDb();
 
     setCurrentUser(null);
     queryClient.clear();
 
     // Force back to login route without weird double reloads
-    window.location.assign(redirectTo);
+    window.location.assign("/");
   };
 
   const returnToPlatformAdmin = async () => {
@@ -315,7 +286,7 @@ export const TopBar = () => {
       className={cn(
         // ✅ sticky so it stays clean while scrolling
         "sticky top-0 z-40",
-        isImpersonating || demoBanner ? "h-[92px] md:h-[104px]" : "h-14 md:h-16",
+        isImpersonating ? "h-[92px] md:h-[104px]" : "h-14 md:h-16",
         "border-b border-border/70",
         "bg-background/72 backdrop-blur-xl supports-[backdrop-filter]:bg-background/58"
       )}
@@ -338,25 +309,7 @@ export const TopBar = () => {
         </div>
       )}
 
-      {!isImpersonating && demoBanner && (
-        <div className="px-3 md:px-4 pt-2">
-          <div className="rounded-xl border border-sky-500/25 bg-sky-500/10 px-3 py-2 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-xs font-semibold text-sky-200 truncate">Live Demo</div>
-              <div className="text-[11px] text-muted-foreground truncate">
-                {demoBanner.msLeft > 0
-                  ? `Expires in ${Math.max(0, Math.ceil(demoBanner.msLeft / (60 * 60 * 1000)))}h`
-                  : "Expired"}
-              </div>
-            </div>
-            <Button size="sm" variant="outline" onClick={handleLogout}>
-              End Demo
-            </Button>
-          </div>
-        </div>
-      )}
-
-      <div className={cn("px-3 md:px-4 flex items-center justify-between gap-3", isImpersonating || demoBanner ? "h-14 md:h-16" : "h-full")}>
+      <div className={cn("px-3 md:px-4 flex items-center justify-between gap-3", isImpersonating ? "h-14 md:h-16" : "h-full")}>
         {/* LEFT: Status */}
         <div className="flex items-center gap-3 min-w-0">
           <motion.div

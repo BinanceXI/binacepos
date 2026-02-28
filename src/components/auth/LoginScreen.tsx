@@ -5,7 +5,6 @@ import { Lock, ShieldCheck, Wifi, WifiOff, Eye, EyeOff, User } from "lucide-reac
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { usePOS } from "@/contexts/POSContext";
 import { supabase } from "@/lib/supabase";
 import {
@@ -27,50 +26,6 @@ import { NativeBiometric } from "@capgo/capacitor-native-biometric";
 import { BRAND } from "@/lib/brand";
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import { BinanceWatermark } from "@/components/brand/BinanceWatermark";
-import { isDemoEntry } from "@/lib/demoEntry";
-
-const DEMO_EXPIRES_KEY = "binancexi_demo_expires_at";
-
-declare global {
-  interface Window {
-    turnstile?: {
-      render: (el: HTMLElement, opts: any) => string | number;
-      reset: (widgetId?: any) => void;
-      remove: (widgetId: any) => void;
-    };
-  }
-}
-
-let turnstileScriptPromise: Promise<void> | null = null;
-
-function loadTurnstileScript(): Promise<void> {
-  if (turnstileScriptPromise) return turnstileScriptPromise;
-  turnstileScriptPromise = new Promise((resolve, reject) => {
-    try {
-      if (typeof document === "undefined") return resolve();
-      if (window.turnstile?.render) return resolve();
-
-      const existing = document.querySelector<HTMLScriptElement>("script[data-turnstile]");
-      if (existing) {
-        existing.addEventListener("load", () => resolve());
-        existing.addEventListener("error", () => reject(new Error("Failed to load Turnstile")));
-        return;
-      }
-
-      const s = document.createElement("script");
-      s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-      s.async = true;
-      s.defer = true;
-      s.dataset.turnstile = "1";
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error("Failed to load Turnstile"));
-      document.head.appendChild(s);
-    } catch (e) {
-      reject(e);
-    }
-  });
-  return turnstileScriptPromise;
-}
 
 const CLOUD_ACCOUNT_INVALID_HINTS = [
   "invalid credentials",
@@ -115,24 +70,9 @@ export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
   const [showSecret, setShowSecret] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [demoOpen, setDemoOpen] = useState(false);
-  const [demoEmail, setDemoEmail] = useState("");
-  const [demoLoading, setDemoLoading] = useState(false);
-  const turnstileSiteKey = String((import.meta as any)?.env?.VITE_TURNSTILE_SITE_KEY || "").trim();
-  const [turnstileToken, setTurnstileToken] = useState<string>("");
-  const [turnstileError, setTurnstileError] = useState<string | null>(null);
 
   const usernameRef = useRef<HTMLInputElement>(null);
   const secretRef = useRef<HTMLInputElement>(null);
-  const turnstileContainerRef = useRef<HTMLDivElement>(null);
-  const turnstileWidgetIdRef = useRef<any>(null);
-
-  const liveDemoEnabled = ["1", "true", "yes"].includes(
-    String((import.meta as any)?.env?.VITE_ENABLE_LIVE_DEMO || "").trim().toLowerCase()
-  );
-  const showDemo =
-    liveDemoEnabled &&
-    (isDemoEntry() || String((import.meta as any)?.env?.VITE_DEMO_MODE || "").trim() === "1");
 
   useEffect(() => {
     usernameRef.current?.focus();
@@ -148,57 +88,6 @@ export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
       }
     })();
   }, []);
-
-  // Live demo captcha (Turnstile) - rendered only when site key is configured.
-  useEffect(() => {
-    if (!demoOpen) {
-      setTurnstileToken("");
-      setTurnstileError(null);
-      const id = turnstileWidgetIdRef.current;
-      turnstileWidgetIdRef.current = null;
-      try {
-        if (id != null && window.turnstile?.remove) window.turnstile.remove(id);
-      } catch {
-        // ignore
-      }
-      return;
-    }
-
-    if (!turnstileSiteKey) return;
-    const el = turnstileContainerRef.current;
-    if (!el) return;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        await loadTurnstileScript();
-        if (cancelled) return;
-        if (!window.turnstile?.render) throw new Error("Captcha unavailable");
-
-        el.innerHTML = "";
-        const widgetId = window.turnstile.render(el, {
-          sitekey: turnstileSiteKey,
-          theme: "auto",
-          callback: (token: string) => {
-            setTurnstileToken(String(token || ""));
-            setTurnstileError(null);
-          },
-          "expired-callback": () => setTurnstileToken(""),
-          "error-callback": () => {
-            setTurnstileToken("");
-            setTurnstileError("Captcha failed. Try again.");
-          },
-        });
-        turnstileWidgetIdRef.current = widgetId;
-      } catch (e: any) {
-        setTurnstileError(e?.message || "Failed to load captcha");
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [demoOpen, turnstileSiteKey]);
 
   const enforceDeviceLicense = async (profile: any) => {
     const role = String(profile?.role || "").trim().toLowerCase();
@@ -412,87 +301,6 @@ export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
       onLogin();
     } catch (err: any) {
       toast.error(err?.message || "Fingerprint cancelled / failed");
-    }
-  };
-
-  const startDemoSession = async () => {
-    if (demoLoading || loading) return;
-    if (!liveDemoEnabled) {
-      toast.error("Live demo is disabled on this deployment");
-      return;
-    }
-    if (!navigator.onLine) {
-      toast.error("Live demo requires an internet connection");
-      return;
-    }
-
-    if (turnstileSiteKey && !turnstileToken) {
-      toast.error("Please complete the captcha to start the demo");
-      return;
-    }
-
-    setDemoLoading(true);
-    try {
-      const email = String(demoEmail || "").trim() || null;
-      const { data, error: fnErr } = await supabase.functions.invoke("create_demo_session", {
-        body: {
-          ...(email ? { email } : {}),
-          ...(turnstileToken ? { turnstile_token: turnstileToken } : {}),
-        },
-      });
-      if (fnErr) throw fnErr;
-      if ((data as any)?.error) throw new Error((data as any).error);
-
-      const demoUsername = sanitizeUsername(String((data as any)?.username || ""));
-      const demoPassword = String((data as any)?.password || "");
-      const expires_at = String((data as any)?.expires_at || "").trim();
-
-      if (!demoUsername || demoUsername.length < 3) throw new Error("Demo provisioning returned invalid username");
-      if (!demoPassword || demoPassword.length < 6) throw new Error("Demo provisioning returned invalid password");
-
-      try {
-        if (expires_at) localStorage.setItem(DEMO_EXPIRES_KEY, expires_at);
-      } catch {
-        // ignore
-      }
-
-      // Fill inputs so the visitor doesn't have to type anything if auto-login fails.
-      setUsername(demoUsername);
-      setSecret(demoPassword);
-
-      // Auto-login immediately (1-click demo entry).
-      try {
-        const cloudUser = await ensureOnlineSession(demoUsername, demoPassword);
-        await enforceDeviceLicense(cloudUser as any);
-
-        setCurrentUser({
-          id: String((cloudUser as any).id),
-          full_name: (cloudUser as any).full_name || (cloudUser as any).username,
-          name: (cloudUser as any).full_name || (cloudUser as any).username,
-          username: (cloudUser as any).username,
-          role: ((cloudUser as any).role as any) || "cashier",
-          permissions: (cloudUser as any).permissions || {},
-          business_id: (cloudUser as any).business_id ?? null,
-          active: true,
-        } as any);
-
-        sessionStorage.setItem("binancexi_session_active", "1");
-        localStorage.setItem("binancexi_last_username", String((cloudUser as any).username || demoUsername));
-
-        toast.success("Welcome to the live demo");
-        setDemoOpen(false);
-        onLogin();
-        return;
-      } catch (autoErr: any) {
-        if (import.meta.env.DEV) console.warn("[Demo] Auto-login failed, falling back to manual login", autoErr);
-      }
-
-      toast.success("Demo credentials ready. Click Access System to enter the demo.");
-      setDemoOpen(false);
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to start live demo");
-    } finally {
-      setDemoLoading(false);
     }
   };
 
@@ -771,17 +579,6 @@ export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
               Use Fingerprint
             </Button>
 
-            {showDemo && (
-              <Button
-                type="button"
-                variant="secondary"
-                className="w-full h-12 rounded-xl"
-                onClick={() => setDemoOpen(true)}
-              >
-                Try Live Demo
-              </Button>
-            )}
-
             <div className="text-xs text-muted-foreground text-center">
               Offline-first sign-in uses your local password. If online, a cloud session is also created for syncing.
             </div>
@@ -790,45 +587,6 @@ export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
       </div>
 
       <BinanceWatermark className="fixed right-3 bottom-3 z-30" />
-
-      <Dialog open={demoOpen} onOpenChange={setDemoOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Live Demo</DialogTitle>
-            <DialogDescription>
-              We will create a temporary demo business, fill the login details, and log you in automatically.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-2">
-            <Label>Email (optional)</Label>
-            <Input value={demoEmail} onChange={(e) => setDemoEmail(e.target.value)} placeholder="you@example.com" />
-            <div className="text-[11px] text-muted-foreground">
-              Optional: helps us understand usage. Leave blank if you want.
-            </div>
-          </div>
-
-          {turnstileSiteKey && (
-            <div className="space-y-2">
-              <Label>Verification</Label>
-              <div ref={turnstileContainerRef} />
-              {turnstileError ? <div className="text-[11px] text-red-500">{turnstileError}</div> : null}
-              <div className="text-[11px] text-muted-foreground">
-                This protects the demo from abuse so it stays available.
-              </div>
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDemoOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={startDemoSession} disabled={demoLoading}>
-              {demoLoading ? "Starting..." : "Start Demo"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 };

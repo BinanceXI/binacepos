@@ -4,7 +4,7 @@ export type LocalAuthUser = {
   id: string;
   username: string;
   full_name: string | null;
-  role: "platform_admin" | "admin" | "cashier";
+  role: "platform_admin" | "master_admin" | "super_admin" | "admin" | "cashier";
   permissions: any;
   business_id?: string | null;
   active: boolean;

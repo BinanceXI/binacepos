@@ -55,7 +55,19 @@ export const POSSidebar = () => {
   const visibleItems = useMemo(() => {
     if (!currentUser) return [];
     if (isPlatform) return navItems.filter((i) => i.path.startsWith("/platform/"));
-    if (isCashier) return navItems.filter((i) => i.path === "/pos");
+    if (isCashier) {
+      const perms = (currentUser as any)?.permissions || {};
+      const allowed = new Set<string>(["/pos"]);
+      if (perms.allowReports) {
+        allowed.add("/reports");
+        allowed.add("/profit");
+        allowed.add("/expenses");
+      }
+      if (perms.allowInventory) allowed.add("/inventory");
+      if (perms.allowEditReceipt) allowed.add("/receipts");
+      if (perms.allowSettings) allowed.add("/settings");
+      return navItems.filter((i) => allowed.has(i.path));
+    }
     if (isAdmin) return navItems.filter((i) => !i.path.startsWith("/platform/"));
     return navItems.filter((i) => i.path === "/pos");
   }, [currentUser, isAdmin, isCashier, isPlatform]);
@@ -187,7 +199,7 @@ export const POSSidebar = () => {
           {!collapsed && isCashier && (
             <div className="mt-4 px-3 py-3 rounded-xl border border-white/12 bg-white/[0.04] fade-rise">
               <div className="text-[12px] text-white/75 font-medium">Cashier Mode</div>
-              <div className="text-[11px] text-white/50 mt-0.5">POS only access</div>
+              <div className="text-[11px] text-white/50 mt-0.5">Permission-controlled access</div>
             </div>
           )}
         </nav>

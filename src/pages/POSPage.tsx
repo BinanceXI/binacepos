@@ -34,7 +34,7 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Camera } from "@capacitor/camera";
 import { enqueueThermalJob } from "@/lib/printQueue";
-import { tryPrintThermalQueue } from "@/lib/thermalPrint";
+import { isAutoPrintSalesEnabled, tryPrintThermalQueue } from "@/lib/thermalPrint";
 import { ServiceBookingsDialog } from "@/components/services/ServiceBookingsDialog";
 import { pullRecentServiceBookings, pushUnsyncedServiceBookings } from "@/lib/serviceBookings";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
@@ -136,6 +136,7 @@ export const POSPage = () => {
   // ✅ PRINT + QUEUE (runs AFTER receipt UI is rendered)
 useEffect(() => {
   if (!lastOrderData) return;
+  if (!isAutoPrintSalesEnabled()) return;
 
   // show UI "Printing..."
   setIsPrinting(true);
@@ -224,6 +225,7 @@ const [showMobileCart, setShowMobileCart] = useState(false);
     removeFromCart,
     updateCartItemQuantity,
     updateCartItemDiscount,
+    can,
     clearCart,
     selectedCategory,
     setSelectedCategory,
@@ -239,6 +241,19 @@ const [showMobileCart, setShowMobileCart] = useState(false);
     recordSaleByItems,
     syncStatus,
   } = usePOS();
+  const canDiscount = can("allowDiscount");
+  const canServiceBookings = can("allowServiceBookings");
+
+  useEffect(() => {
+    if (canDiscount) return;
+    setShowDiscountDialog(false);
+    setShowItemDiscountDialog(false);
+  }, [canDiscount]);
+
+  useEffect(() => {
+    if (canServiceBookings) return;
+    setServiceBookingsOpen(false);
+  }, [canServiceBookings]);
 
   const { formatDate } = useSecureTime();
 
@@ -483,6 +498,10 @@ const [showMobileCart, setShowMobileCart] = useState(false);
   );
 
   const openNewServiceBooking = useCallback(() => {
+    if (!canServiceBookings) {
+      toast.error("Not allowed to manage service bookings");
+      return;
+    }
     if (posMode !== "service") {
       toast.error("Switch to Service mode to book a service");
       return;
@@ -512,17 +531,25 @@ const [showMobileCart, setShowMobileCart] = useState(false);
 
     setServiceBookingsMode("new");
     setServiceBookingsOpen(true);
-  }, [cart, customerName, posMode, total]);
+  }, [canServiceBookings, cart, customerName, posMode, total]);
 
   const openServiceBookingsList = useCallback(() => {
+    if (!canServiceBookings) {
+      toast.error("Not allowed to manage service bookings");
+      return;
+    }
     setServiceBookingsSuggested({});
     setServiceBookingsMode("list");
     setServiceBookingsOpen(true);
-  }, []);
+  }, [canServiceBookings]);
 
 
   // ---- GLOBAL DISCOUNT CODE ----
   const handleApplyDiscount = useCallback(() => {
+    if (!canDiscount) {
+      toast.error("Not allowed to apply discounts");
+      return;
+    }
     if (discountCode.trim().toUpperCase() === "VIP10") {
       setActiveDiscount({ id: "VIP10", name: "VIP", type: "percentage", value: 10, active: true } as any);
       setShowDiscountDialog(false);
@@ -531,11 +558,15 @@ const [showMobileCart, setShowMobileCart] = useState(false);
       return;
     }
     toast.error("Invalid Discount Code");
-  }, [discountCode, setActiveDiscount]);
+  }, [canDiscount, discountCode, setActiveDiscount]);
 
   // ---- ITEM DISCOUNT ----
   const openItemDiscount = useCallback(
     (lineId: string) => {
+      if (!canDiscount) {
+        toast.error("Not allowed to apply discounts");
+        return;
+      }
       const item: any = cart.find((x: any) => x.lineId === lineId);
       if (!item) return;
 
@@ -554,10 +585,14 @@ const [showMobileCart, setShowMobileCart] = useState(false);
 
       setShowItemDiscountDialog(true);
     },
-    [cart]
+    [canDiscount, cart]
   );
 
   const applyItemDiscount = useCallback(() => {
+    if (!canDiscount) {
+      toast.error("Not allowed to apply discounts");
+      return;
+    }
     if (!discountLineId) return;
 
     const raw = Number(String(discountValueRaw || "").trim());
@@ -583,14 +618,18 @@ const [showMobileCart, setShowMobileCart] = useState(false);
 
     setShowItemDiscountDialog(false);
     toast.success("Discount applied");
-  }, [discountLineId, discountMode, discountValueRaw, cart, updateCartItemDiscount]);
+  }, [canDiscount, discountLineId, discountMode, discountValueRaw, cart, updateCartItemDiscount]);
 
   const clearItemDiscount = useCallback(() => {
+    if (!canDiscount) {
+      toast.error("Not allowed to apply discounts");
+      return;
+    }
     if (!discountLineId) return;
     updateCartItemDiscount(discountLineId, 0, "fixed");
     setShowItemDiscountDialog(false);
     toast.success("Discount removed");
-  }, [discountLineId, updateCartItemDiscount]);
+  }, [canDiscount, discountLineId, updateCartItemDiscount]);
 
   // ---- KEYBOARD ----
   const moveSelection = useCallback(
@@ -682,6 +721,7 @@ const [showMobileCart, setShowMobileCart] = useState(false);
 
       // F6 = Discount code dialog
       if (e.key === "F6") {
+        if (!canDiscount) return;
         e.preventDefault();
         setShowDiscountDialog(true);
         return;
@@ -740,6 +780,7 @@ const [showMobileCart, setShowMobileCart] = useState(false);
       handleQuickEntry,
       filteredProducts,
       addToCart,
+      canDiscount,
       moveSelection,
       addSelectedProduct,
       clearCart,
@@ -796,9 +837,11 @@ const [showMobileCart, setShowMobileCart] = useState(false);
               <div>
                 <kbd className="bg-muted px-1 rounded">F3</kbd> Hold Sale
               </div>
-              <div>
-                <kbd className="bg-muted px-1 rounded">F6</kbd> Discount Code
-              </div>
+              {canDiscount && (
+                <div>
+                  <kbd className="bg-muted px-1 rounded">F6</kbd> Discount Code
+                </div>
+              )}
               <div>
                 <kbd className="bg-muted px-1 rounded">↑ ↓</kbd> Navigate products
               </div>
@@ -857,17 +900,19 @@ const [showMobileCart, setShowMobileCart] = useState(false);
           </div>
 
           <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-9 text-xs gap-1"
-              onClick={() => setShowDiscountDialog(true)}
-              title="Discount code"
-            >
-              <Percent className="w-3.5 h-3.5" />
-              <span className="inline sm:hidden">Disc</span>
-              <span className="hidden sm:inline">Discount</span>
-            </Button>
+            {canDiscount && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-9 text-xs gap-1"
+                onClick={() => setShowDiscountDialog(true)}
+                title="Discount code"
+              >
+                <Percent className="w-3.5 h-3.5" />
+                <span className="inline sm:hidden">Disc</span>
+                <span className="hidden sm:inline">Discount</span>
+              </Button>
+            )}
 
             <Button
               size="sm"
@@ -1039,14 +1084,14 @@ const [showMobileCart, setShowMobileCart] = useState(false);
                   onDec={() => decQty(item.lineId, item.quantity)}
                   onInc={() => incQty(item.lineId, item.quantity)}
                   onRemove={() => removeLine(item.lineId)}
-                  onDiscount={() => openItemDiscount(item.lineId)}
+                  onDiscount={canDiscount ? () => openItemDiscount(item.lineId) : undefined}
                 />
               ))
             )}
           </AnimatePresence>
         </div>
 
-        {posMode === "service" && (
+        {posMode === "service" && canServiceBookings && (
           <div className="px-3 pb-3">
             <div className="grid grid-cols-2 gap-2">
               <Button type="button" variant="outline" className="gap-2" onClick={openNewServiceBooking}>
@@ -1150,7 +1195,7 @@ const [showMobileCart, setShowMobileCart] = useState(false);
                       onDec={() => decQty(item.lineId, item.quantity)}
                       onInc={() => incQty(item.lineId, item.quantity)}
                       onRemove={() => removeLine(item.lineId)}
-                      onDiscount={() => openItemDiscount(item.lineId)}
+                      onDiscount={canDiscount ? () => openItemDiscount(item.lineId) : undefined}
                     />
                   ))
                 )}
@@ -1158,7 +1203,7 @@ const [showMobileCart, setShowMobileCart] = useState(false);
             </div>
 
             <div className="border-t">
-              {posMode === "service" && (
+              {posMode === "service" && canServiceBookings && (
                 <div className="p-3 border-b border-border bg-card">
                   <div className="grid grid-cols-2 gap-2">
                     <Button type="button" variant="outline" className="gap-2" onClick={openNewServiceBooking}>
@@ -1187,30 +1232,32 @@ const [showMobileCart, setShowMobileCart] = useState(false);
       </Drawer>
 
 
-      <ServiceBookingsDialog
-        open={serviceBookingsOpen}
-        onOpenChange={setServiceBookingsOpen}
-        mode={serviceBookingsMode}
-        services={serviceProducts}
-        suggested={serviceBookingsSuggested}
-        onCreateSale={async ({ items, payments, total: saleTotal, meta, customerName: saleCustomerName }) => {
-          await recordSaleByItems({
-            items,
-            payments: payments as any,
-            total: saleTotal,
-            meta: meta as any,
-            customerName: saleCustomerName,
-          });
-          queryClient.invalidateQueries({ queryKey: ["receipts"] });
-        }}
-        onPrintSale={printAdhocSale}
-        onAfterCreateBooking={() => {
-          if (serviceBookingsSuggested.clearCartAfter) {
-            clearCart();
-            toast.message("Booking saved — cart cleared");
-          }
-        }}
-      />
+      {canServiceBookings && (
+        <ServiceBookingsDialog
+          open={serviceBookingsOpen}
+          onOpenChange={setServiceBookingsOpen}
+          mode={serviceBookingsMode}
+          services={serviceProducts}
+          suggested={serviceBookingsSuggested}
+          onCreateSale={async ({ items, payments, total: saleTotal, meta, customerName: saleCustomerName }) => {
+            await recordSaleByItems({
+              items,
+              payments: payments as any,
+              total: saleTotal,
+              meta: meta as any,
+              customerName: saleCustomerName,
+            });
+            queryClient.invalidateQueries({ queryKey: ["receipts"] });
+          }}
+          onPrintSale={printAdhocSale}
+          onAfterCreateBooking={() => {
+            if (serviceBookingsSuggested.clearCartAfter) {
+              clearCart();
+              toast.message("Booking saved — cart cleared");
+            }
+          }}
+        />
+      )}
 
       {/* GLOBAL DISCOUNT CODE DIALOG */}
       <Dialog open={showDiscountDialog} onOpenChange={setShowDiscountDialog}>
@@ -1376,7 +1423,7 @@ const CartItemRow = ({
   onDec: () => void;
   onInc: () => void;
   onRemove: () => void;
-  onDiscount: () => void;
+  onDiscount?: () => void;
 }) => {
   const it: any = item as any;
   const unitPrice = it.customPrice ?? it.product.price;
@@ -1411,13 +1458,15 @@ const CartItemRow = ({
           <span>{Number(it.quantity ?? 0)}</span>
         </div>
 
-        <button
-          type="button"
-          onClick={onDiscount}
-          className="mt-1 text-[11px] text-primary hover:underline inline-flex items-center gap-1"
-        >
-          <Percent className="w-3 h-3" /> Discount
-        </button>
+        {onDiscount && (
+          <button
+            type="button"
+            onClick={onDiscount}
+            className="mt-1 text-[11px] text-primary hover:underline inline-flex items-center gap-1"
+          >
+            <Percent className="w-3 h-3" /> Discount
+          </button>
+        )}
       </div>
 
       <div className="flex items-center gap-1 bg-muted/50 rounded-lg p-0.5">

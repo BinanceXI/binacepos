@@ -6,6 +6,7 @@ export interface UserPermissions {
   allowVoid: boolean;
   allowPriceEdit: boolean;
   allowDiscount: boolean;
+  allowServiceBookings: boolean;
   allowReports: boolean;
   allowInventory: boolean;
   allowSettings: boolean;

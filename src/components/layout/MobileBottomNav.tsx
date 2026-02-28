@@ -35,7 +35,15 @@ const PLATFORM_MORE_ITEMS: NavItem[] = [
   { path: "/platform/audit-logs", label: "Audit", icon: Shield },
   { path: "/platform/settings", label: "Settings", icon: Settings },
 ];
-const CASHIER_ITEMS: NavItem[] = [{ path: "/pos", label: "POS", icon: ShoppingCart, badge: true }];
+const CASHIER_PRIMARY_ITEMS: NavItem[] = [{ path: "/pos", label: "POS", icon: ShoppingCart, badge: true }];
+const CASHIER_MORE_ITEMS: NavItem[] = [
+  { path: "/reports", label: "Reports", icon: BarChart3 },
+  { path: "/inventory", label: "Stock", icon: Package },
+  { path: "/receipts", label: "Receipts", icon: Printer },
+  { path: "/profit", label: "Profit", icon: PieChart },
+  { path: "/expenses", label: "Expenses", icon: Wallet },
+  { path: "/settings", label: "Settings", icon: Settings },
+];
 
 // Mobile bottom nav must stay compact; extra admin pages live under "More".
 const ADMIN_PRIMARY_ITEMS: NavItem[] = [
@@ -65,15 +73,32 @@ export const MobileBottomNav = () => {
 
   if (!currentUser) return null;
 
+  const cashierPerms = ((currentUser as any)?.permissions || {}) as Record<string, boolean>;
+  const cashierMoreItems = CASHIER_MORE_ITEMS.filter((item) => {
+    if (item.path === "/reports" || item.path === "/profit" || item.path === "/expenses") {
+      return !!cashierPerms.allowReports;
+    }
+    if (item.path === "/inventory") return !!cashierPerms.allowInventory;
+    if (item.path === "/receipts") return !!cashierPerms.allowEditReceipt;
+    if (item.path === "/settings") return !!cashierPerms.allowSettings;
+    return false;
+  });
+
   const primaryItems: NavItem[] = isPlatform
     ? PLATFORM_PRIMARY_ITEMS
     : isCashier
-    ? CASHIER_ITEMS
+    ? CASHIER_PRIMARY_ITEMS
     : isAdmin
     ? ADMIN_PRIMARY_ITEMS
-    : CASHIER_ITEMS;
+    : CASHIER_PRIMARY_ITEMS;
 
-  const moreItems: NavItem[] = isPlatform ? PLATFORM_MORE_ITEMS : isAdmin ? ADMIN_MORE_ITEMS : [];
+  const moreItems: NavItem[] = isPlatform
+    ? PLATFORM_MORE_ITEMS
+    : isAdmin
+    ? ADMIN_MORE_ITEMS
+    : isCashier
+    ? cashierMoreItems
+    : [];
   const isMoreActive = moreItems.some((i) => location.pathname === i.path);
 
   return (

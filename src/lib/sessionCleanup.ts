@@ -61,15 +61,11 @@ function deleteDb(name: string): Promise<void> {
   });
 }
 
-export function clearClientStorage(opts?: { includeDemoExpires?: boolean }) {
+export function clearClientStorage() {
   if (typeof window === "undefined") return;
 
   for (const k of CORE_KEYS) safeRemoveItem(k);
   for (const k of OFFLINE_CACHE_KEYS) removeKeyAcrossScopes(k);
-
-  if (opts?.includeDemoExpires) {
-    safeRemoveItem("binancexi_demo_expires_at");
-  }
 
   for (const k of collectSupabaseTokenKeys()) safeRemoveItem(k);
 }

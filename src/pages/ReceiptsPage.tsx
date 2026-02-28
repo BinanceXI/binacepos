@@ -34,19 +34,44 @@ import { Capacitor } from "@capacitor/core";
 import { getTenantScopeFromLocalUser, readScopedJSON, writeScopedJSON } from "@/lib/tenantScope";
 // 🔥 THERMAL PRINTER
 import {
-  PRINTER_MODE_KEY,
+  PRINTER_AUTO_PRINT_SALES_KEY,
+  PRINTER_FALLBACK_BROWSER_KEY,
   PRINTER_IP_KEY,
+  PRINTER_MODE_KEY,
   PRINTER_PORT_KEY,
+  PRINTER_SERIAL_BAUD_KEY,
+  PRINTER_SERIAL_PORT_KEY,
+  PRINTER_SPOOLER_PRINTER_KEY,
+  PRINTER_TRANSPORT_KEY,
+  listSerialPorts,
+  listWindowsPrinters,
   printReceiptSmart,
+  tryPrintThermalQueue,
+  type PrinterOverrides,
 } from "@/lib/thermalPrint";
-
-import { tryPrintThermalQueue } from "@/lib/thermalPrint";
 import type { ReceiptStoreSettings } from "@/core/receipts/receiptPrintModel";
 
 // --------------------
 // Offline queue helpers
 // --------------------
 const OFFLINE_QUEUE_KEY = "binancexi_offline_queue";
+
+type SerialPortDto = {
+  port_name: string;
+  port_type: string;
+  manufacturer?: string | null;
+  product?: string | null;
+  serial_number?: string | null;
+  vid?: number | null;
+  pid?: number | null;
+};
+
+function isTauriRuntime() {
+  if (typeof window === "undefined") return false;
+  const w = window as any;
+  const ua = String(window.navigator?.userAgent || "");
+  return Boolean(w.__TAURI_INTERNALS__ || w.__TAURI__ || w.__TAURI_IPC__ || ua.includes("Tauri"));
+}
 
 function safeJSONParse<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
@@ -150,12 +175,13 @@ function toThermalPayload(data: PrintData, settings?: ReceiptStoreSettings | nul
 }
 
 export const ReceiptsPage = () => {
-  const { currentUser, can } = usePOS();
+  const { currentUser } = usePOS();
   const isAdmin = currentUser?.role === "admin";
   const canVoid = isAdmin || !!currentUser?.permissions?.allowVoid;
   const queryClient = useQueryClient();
   const platform = Capacitor.getPlatform();
   const isAndroid = platform === "android";
+  const tauriRuntime = isTauriRuntime();
   const configuredPublicAppUrl = getConfiguredPublicAppUrl();
   const isVerifyBaseManaged = !!configuredPublicAppUrl;
   // 🔥 AUTO-RUN THERMAL QUEUE
@@ -171,21 +197,33 @@ useEffect(() => {
 
   const [activeTab, setActiveTab] = useState<"settings" | "receipts">("settings");
   // 🔥 PRINTER SETTINGS
-const normalizePrinterMode = (raw: string | null) => {
-  const mode = String(raw || "").trim();
-  if (mode === "browser" || mode === "tcp") return mode;
-  if (isAndroid && mode === "bt") return "bt";
-  return isAndroid ? "bt" : "browser";
-};
-const [printerMode, setPrinterMode] = useState(
-  normalizePrinterMode(localStorage.getItem(PRINTER_MODE_KEY))
-);
-const [printerIp, setPrinterIp] = useState(
-  localStorage.getItem(PRINTER_IP_KEY) || ""
-);
-const [printerPort, setPrinterPort] = useState(
-  localStorage.getItem(PRINTER_PORT_KEY) || "9100"
-);
+  const normalizePrinterTransport = (raw: string | null) => {
+    const mode = String(raw || "").trim().toLowerCase();
+    if (isAndroid) return mode === "tcp" ? "tcp" : "bt";
+    if (mode === "tcp" || mode === "serial" || mode === "spooler" || mode === "browser") return mode;
+    if (mode === "bt" && tauriRuntime) return "serial";
+    return tauriRuntime ? "spooler" : "browser";
+  };
+  const [printerTransport, setPrinterTransport] = useState(
+    normalizePrinterTransport(localStorage.getItem(PRINTER_TRANSPORT_KEY) || localStorage.getItem(PRINTER_MODE_KEY))
+  );
+  const [printerIp, setPrinterIp] = useState(localStorage.getItem(PRINTER_IP_KEY) || "");
+  const [printerPort, setPrinterPort] = useState(localStorage.getItem(PRINTER_PORT_KEY) || "9100");
+  const [serialPortName, setSerialPortName] = useState(localStorage.getItem(PRINTER_SERIAL_PORT_KEY) || "");
+  const [serialBaud, setSerialBaud] = useState(localStorage.getItem(PRINTER_SERIAL_BAUD_KEY) || "9600");
+  const [spoolerPrinterName, setSpoolerPrinterName] = useState(
+    localStorage.getItem(PRINTER_SPOOLER_PRINTER_KEY) || ""
+  );
+  const [autoPrintSales, setAutoPrintSales] = useState(
+    ["1", "true", "yes"].includes(String(localStorage.getItem(PRINTER_AUTO_PRINT_SALES_KEY) ?? "1").toLowerCase())
+  );
+  const [fallbackToBrowser, setFallbackToBrowser] = useState(
+    ["1", "true", "yes"].includes(String(localStorage.getItem(PRINTER_FALLBACK_BROWSER_KEY) ?? "1").toLowerCase())
+  );
+  const [serialPorts, setSerialPorts] = useState<SerialPortDto[]>([]);
+  const [serialBusy, setSerialBusy] = useState(false);
+  const [windowsPrinters, setWindowsPrinters] = useState<string[]>([]);
+  const [windowsPrintersBusy, setWindowsPrintersBusy] = useState(false);
 
   // Preview uses stable fake receipt id + number
   const [previewReceiptId] = useState(
@@ -247,14 +285,14 @@ const [printerPort, setPrinterPort] = useState(
     if (settings) setFormData(settings);
   }, [settings]);
 
-  const runReprint = useCallback(async (data: PrintData) => {
+  const runReprint = useCallback(async (data: PrintData, overrides?: PrinterOverrides) => {
     setPrintData(data);
     setIsPrinting(true);
     try {
       // Let React commit #receipt-print-area before printer pipeline reads it.
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      await printReceiptSmart(toThermalPayload(data, settings as any));
+      await printReceiptSmart(toThermalPayload(data, settings as any), overrides);
       toast.success("Print sent");
     } catch (e: any) {
       toast.error(e?.message || "Print failed");
@@ -297,13 +335,51 @@ const [printerPort, setPrinterPort] = useState(
     updateSettingsMutation.mutate(formData);
   };
 
+  const refreshSerialPorts = useCallback(async () => {
+    if (!tauriRuntime) return;
+    setSerialBusy(true);
+    try {
+      const ports = await listSerialPorts();
+      setSerialPorts(ports || []);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to list serial ports");
+    } finally {
+      setSerialBusy(false);
+    }
+  }, [tauriRuntime]);
+
+  const refreshWindowsPrinterList = useCallback(async () => {
+    if (!tauriRuntime) return;
+    setWindowsPrintersBusy(true);
+    try {
+      const printers = await listWindowsPrinters();
+      setWindowsPrinters(printers || []);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to list windows printers");
+    } finally {
+      setWindowsPrintersBusy(false);
+    }
+  }, [tauriRuntime]);
+
+  useEffect(() => {
+    if (!tauriRuntime) return;
+    if (printerTransport === "serial") void refreshSerialPorts();
+    if (printerTransport === "spooler") void refreshWindowsPrinterList();
+  }, [tauriRuntime, printerTransport, refreshSerialPorts, refreshWindowsPrinterList]);
+
   // 🔥 SAVE PRINTER SETTINGS
 const savePrinterSettings = () => {
-  const nextMode = normalizePrinterMode(printerMode);
-  if (nextMode !== printerMode) setPrinterMode(nextMode);
+  const nextMode = normalizePrinterTransport(printerTransport);
+  if (nextMode !== printerTransport) setPrinterTransport(nextMode);
+  localStorage.setItem(PRINTER_TRANSPORT_KEY, nextMode);
   localStorage.setItem(PRINTER_MODE_KEY, nextMode);
   localStorage.setItem(PRINTER_IP_KEY, printerIp);
   localStorage.setItem(PRINTER_PORT_KEY, printerPort);
+  localStorage.setItem(PRINTER_SERIAL_PORT_KEY, serialPortName);
+  localStorage.setItem(PRINTER_SERIAL_BAUD_KEY, serialBaud);
+  localStorage.setItem(PRINTER_SPOOLER_PRINTER_KEY, spoolerPrinterName);
+  localStorage.setItem(PRINTER_AUTO_PRINT_SALES_KEY, autoPrintSales ? "1" : "0");
+  localStorage.setItem(PRINTER_FALLBACK_BROWSER_KEY, fallbackToBrowser ? "1" : "0");
 
   toast.success("Printer settings saved");
   tryPrintThermalQueue(); // 🔥 PRINT ANY QUEUED RECEIPTS
@@ -332,6 +408,14 @@ const testThermalPrint = async () => {
     receiptId: "test-receipt-id",
     receiptNumber: "TEST-0001",
     paymentMethod: "cash",
+  }, {
+    transport: normalizePrinterTransport(printerTransport) as any,
+    tcp_host: printerIp,
+    tcp_port: Number(printerPort || "9100"),
+    serial_port: serialPortName,
+    serial_baud: Number(serialBaud || "9600"),
+    spooler_printer_name: spoolerPrinterName,
+    fallback_to_browser: fallbackToBrowser,
   });
 };
 
@@ -678,55 +762,169 @@ const testThermalPrint = async () => {
               className="space-y-5"
             >
               <SettingsCard title="Store Identity" icon={Settings2}>
-               {/* ✅ THERMAL PRINTER SETTINGS */}
-<SettingsCard title="Thermal Printer" icon={Printer}>
-  <div className="space-y-4">
+                <SettingsCard title="Thermal Printer" icon={Printer}>
+                  <div className="space-y-4">
+                    <Field label="Transport">
+                      <select
+                        value={printerTransport}
+                        onChange={(e) => setPrinterTransport(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 text-white p-2 rounded"
+                        disabled={!isAdmin}
+                      >
+                        {isAndroid && <option value="bt">Bluetooth (Android)</option>}
+                        <option value="tcp">TCP (LAN / Wi-Fi)</option>
+                        {tauriRuntime && <option value="serial">Serial / COM (USB/Bluetooth SPP)</option>}
+                        {tauriRuntime && <option value="spooler">Windows Printer Spooler</option>}
+                        <option value="browser">Browser Fallback</option>
+                      </select>
+                    </Field>
 
-    <Field label="Printer Mode">
-      <select
-        value={printerMode}
-        onChange={(e) => setPrinterMode(e.target.value)}
-        className="w-full bg-slate-950 border border-slate-800 text-white p-2 rounded"
-        disabled={!isAdmin}
-      >
-        {isAndroid && <option value="bt">Bluetooth (Android)</option>}
-        <option value="tcp">Thermal (LAN / Wi-Fi)</option>
-        <option value="browser">Browser (Fallback)</option>
-      </select>
-    </Field>
+                    {printerTransport === "tcp" && (
+                      <>
+                        <Field label="Printer IP">
+                          <Input
+                            value={printerIp}
+                            onChange={(e) => setPrinterIp(e.target.value)}
+                            placeholder="192.168.1.100"
+                            className="bg-slate-950 border-slate-800 text-white"
+                            disabled={!isAdmin}
+                          />
+                        </Field>
 
-    <Field label="Printer IP">
-      <Input
-        value={printerIp}
-        onChange={(e) => setPrinterIp(e.target.value)}
-        placeholder="192.168.1.100"
-        className="bg-slate-950 border-slate-800 text-white"
-        disabled={!isAdmin}
-      />
-    </Field>
+                        <Field label="Printer Port">
+                          <Input
+                            value={printerPort}
+                            onChange={(e) => setPrinterPort(e.target.value)}
+                            placeholder="9100"
+                            className="bg-slate-950 border-slate-800 text-white"
+                            disabled={!isAdmin}
+                          />
+                        </Field>
+                      </>
+                    )}
 
-    <Field label="Printer Port">
-      <Input
-        value={printerPort}
-        onChange={(e) => setPrinterPort(e.target.value)}
-        placeholder="9100"
-        className="bg-slate-950 border-slate-800 text-white"
-        disabled={!isAdmin}
-      />
-    </Field>
+                    {printerTransport === "serial" && (
+                      <>
+                        <Field label="Serial / COM Port">
+                          <div className="flex gap-2">
+                            <Input
+                              value={serialPortName}
+                              onChange={(e) => setSerialPortName(e.target.value)}
+                              placeholder="COM5"
+                              className="bg-slate-950 border-slate-800 text-white"
+                              disabled={!isAdmin}
+                            />
+                            <Button
+                              variant="outline"
+                              onClick={() => void refreshSerialPorts()}
+                              disabled={!tauriRuntime || serialBusy}
+                            >
+                              {serialBusy ? "Loading..." : "Detect"}
+                            </Button>
+                          </div>
+                          {serialPorts.length > 0 && (
+                            <select
+                              value={serialPortName}
+                              onChange={(e) => setSerialPortName(e.target.value)}
+                              className="mt-2 w-full bg-slate-950 border border-slate-800 text-white p-2 rounded"
+                              disabled={!isAdmin}
+                            >
+                              <option value="">Select detected port</option>
+                              {serialPorts.map((p) => (
+                                <option key={p.port_name} value={p.port_name}>
+                                  {p.port_name} ({p.port_type})
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </Field>
+                        <Field label="Baud Rate">
+                          <Input
+                            value={serialBaud}
+                            onChange={(e) => setSerialBaud(e.target.value)}
+                            placeholder="9600"
+                            className="bg-slate-950 border-slate-800 text-white"
+                            disabled={!isAdmin}
+                          />
+                        </Field>
+                      </>
+                    )}
 
-    <div className="flex gap-2">
-      <Button onClick={savePrinterSettings} className="flex-1" disabled={!isAdmin}>
-        Save Printer
-      </Button>
+                    {printerTransport === "spooler" && (
+                      <Field label="Windows Printer Name">
+                        <div className="flex gap-2">
+                          <Input
+                            value={spoolerPrinterName}
+                            onChange={(e) => setSpoolerPrinterName(e.target.value)}
+                            placeholder="EPSON TM-T20III"
+                            className="bg-slate-950 border-slate-800 text-white"
+                            disabled={!isAdmin}
+                          />
+                          <Button
+                            variant="outline"
+                            onClick={() => void refreshWindowsPrinterList()}
+                            disabled={!tauriRuntime || windowsPrintersBusy}
+                          >
+                            {windowsPrintersBusy ? "Loading..." : "Detect"}
+                          </Button>
+                        </div>
+                        {windowsPrinters.length > 0 && (
+                          <select
+                            value={spoolerPrinterName}
+                            onChange={(e) => setSpoolerPrinterName(e.target.value)}
+                            className="mt-2 w-full bg-slate-950 border border-slate-800 text-white p-2 rounded"
+                            disabled={!isAdmin}
+                          >
+                            <option value="">Select detected printer</option>
+                            {windowsPrinters.map((name) => (
+                              <option key={name} value={name}>
+                                {name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </Field>
+                    )}
 
-      <Button onClick={testThermalPrint} variant="outline" className="flex-1">
-        Test Print
-      </Button>
-    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="flex items-center justify-between p-3 rounded-lg bg-slate-950/60 border border-slate-800">
+                        <div>
+                          <div className="text-sm text-white">Auto print sales</div>
+                          <div className="text-xs text-slate-400">Print automatically after payment.</div>
+                        </div>
+                        <Switch checked={autoPrintSales} onCheckedChange={setAutoPrintSales} disabled={!isAdmin} />
+                      </div>
 
-  </div>
-</SettingsCard>
+                      <div className="flex items-center justify-between p-3 rounded-lg bg-slate-950/60 border border-slate-800">
+                        <div>
+                          <div className="text-sm text-white">Fallback to browser</div>
+                          <div className="text-xs text-slate-400">Use browser print if native transport fails.</div>
+                        </div>
+                        <Switch
+                          checked={fallbackToBrowser}
+                          onCheckedChange={setFallbackToBrowser}
+                          disabled={!isAdmin}
+                        />
+                      </div>
+                    </div>
+
+                    {!tauriRuntime && (printerTransport === "serial" || printerTransport === "spooler") && (
+                      <div className="text-xs text-amber-300">
+                        Serial and spooler transports require the Windows desktop (Tauri) app.
+                      </div>
+                    )}
+
+                    <div className="flex gap-2">
+                      <Button onClick={savePrinterSettings} className="flex-1" disabled={!isAdmin}>
+                        Save Printer
+                      </Button>
+
+                      <Button onClick={testThermalPrint} variant="outline" className="flex-1">
+                        Test Print
+                      </Button>
+                    </div>
+                  </div>
+                </SettingsCard>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <Field label="Business Name">
                     <Input

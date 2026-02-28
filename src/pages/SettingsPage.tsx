@@ -120,6 +120,7 @@ type UserPermissions = {
   allowVoid?: boolean;
   allowPriceEdit?: boolean;
   allowDiscount?: boolean;
+  allowServiceBookings?: boolean;
   allowReports?: boolean;
   allowInventory?: boolean;
   allowSettings?: boolean;
@@ -131,6 +132,7 @@ const DEFAULT_PERMS: Required<UserPermissions> = {
   allowVoid: false,
   allowPriceEdit: false,
   allowDiscount: false,
+  allowServiceBookings: false,
   allowReports: false,
   allowInventory: false,
   allowSettings: false,
@@ -254,6 +256,7 @@ export const SettingsPage = () => {
   const [quickRole, setQuickRole] = useState<"admin" | "cashier">("cashier");
   const [quickInventory, setQuickInventory] = useState(false);
   const [quickDiscount, setQuickDiscount] = useState(false);
+  const [quickServiceBookings, setQuickServiceBookings] = useState(false);
   const [quickReports, setQuickReports] = useState(false);
   const [quickRefunds, setQuickRefunds] = useState(false);
 
@@ -522,6 +525,7 @@ export const SettingsPage = () => {
                 allowVoid: true,
                 allowPriceEdit: true,
                 allowDiscount: true,
+                allowServiceBookings: true,
                 allowReports: true,
                 allowInventory: true,
                 allowSettings: true,
@@ -575,6 +579,7 @@ export const SettingsPage = () => {
               allowVoid: true,
               allowPriceEdit: true,
               allowDiscount: true,
+              allowServiceBookings: true,
               allowReports: true,
               allowInventory: true,
               allowSettings: true,
@@ -640,6 +645,7 @@ export const SettingsPage = () => {
               allowVoid: true,
               allowPriceEdit: true,
               allowDiscount: true,
+              allowServiceBookings: true,
               allowReports: true,
               allowInventory: true,
               allowSettings: true,
@@ -649,6 +655,7 @@ export const SettingsPage = () => {
               ...DEFAULT_PERMS,
               allowInventory: !!quickInventory,
               allowDiscount: !!quickDiscount,
+              allowServiceBookings: !!quickServiceBookings,
               allowReports: !!quickReports,
               allowRefunds: !!quickRefunds,
             };
@@ -682,6 +689,7 @@ export const SettingsPage = () => {
       setQuickRole("cashier");
       setQuickInventory(false);
       setQuickDiscount(false);
+      setQuickServiceBookings(false);
       setQuickReports(false);
       setQuickRefunds(false);
     },
@@ -1253,6 +1261,11 @@ export const SettingsPage = () => {
                           <div className="flex flex-col gap-2 p-3 rounded-xl bg-muted/40 border border-border">
                             <ToggleRow label="Inventory" value={quickInventory} onChange={setQuickInventory} />
                             <ToggleRow label="Discounts" value={quickDiscount} onChange={setQuickDiscount} />
+                            <ToggleRow
+                              label="Service Bookings"
+                              value={quickServiceBookings}
+                              onChange={setQuickServiceBookings}
+                            />
                             <ToggleRow label="Reports" value={quickReports} onChange={setQuickReports} />
                             <ToggleRow label="Refunds" value={quickRefunds} onChange={setQuickRefunds} />
                           </div>
@@ -1410,6 +1423,7 @@ export const SettingsPage = () => {
                                   <div className="text-[11px] text-muted-foreground mt-1">
                                     {(user.permissions?.allowInventory ? "Inventory" : "—")} •{" "}
                                     {(user.permissions?.allowDiscount ? "Discounts" : "—")} •{" "}
+                                    {(user.permissions?.allowServiceBookings ? "Service Bookings" : "—")} •{" "}
                                     {(user.permissions?.allowReports ? "Reports" : "—")} •{" "}
                                     {(user.permissions?.allowRefunds ? "Refunds" : "—")} •{" "}
                                     {(user.permissions?.allowVoid ? "Void" : "—")} •{" "}
@@ -1890,6 +1904,7 @@ export const SettingsPage = () => {
                   {[
                     { key: "allowInventory", label: "Inventory" },
                     { key: "allowDiscount", label: "Discounts" },
+                    { key: "allowServiceBookings", label: "Service Bookings" },
                     { key: "allowReports", label: "Reports" },
                     { key: "allowRefunds", label: "Refunds" },
                     { key: "allowVoid", label: "Void Sales" },

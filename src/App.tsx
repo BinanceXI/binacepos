@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 
 import { Toaster } from "@/components/ui/toaster";
@@ -56,9 +56,24 @@ const persister = createSyncStoragePersister({
 });
 
 const AppRoutes = () => {
-  const { currentUser } = usePOS();
+  const { currentUser, can } = usePOS();
   const role = (currentUser as any)?.role;
   const isPlatformAdmin = isPlatformLikeRole(role);
+  const isAdmin = role === "admin";
+
+  const RequirePermission = ({
+    permission,
+    children,
+    fallbackPath = "/pos",
+  }: {
+    permission: "allowReports" | "allowInventory" | "allowSettings" | "allowEditReceipt";
+    children: ReactNode;
+    fallbackPath?: string;
+  }) => {
+    if (!currentUser) return <Navigate to="/" replace />;
+    if (isAdmin || can(permission)) return <>{children}</>;
+    return <Navigate to={fallbackPath} replace />;
+  };
 
   return (
     <Routes>
@@ -202,9 +217,11 @@ const AppRoutes = () => {
             path="/inventory"
             element={
               <SubscriptionGate>
-                <MainLayout>
-                  <InventoryPage />
-                </MainLayout>
+                <RequirePermission permission="allowInventory">
+                  <MainLayout>
+                    <InventoryPage />
+                  </MainLayout>
+                </RequirePermission>
               </SubscriptionGate>
             }
           />
@@ -212,9 +229,11 @@ const AppRoutes = () => {
             path="/profit"
             element={
               <SubscriptionGate>
-                <MainLayout>
-                  <ProfitAnalysisPage />
-                </MainLayout>
+                <RequirePermission permission="allowReports">
+                  <MainLayout>
+                    <ProfitAnalysisPage />
+                  </MainLayout>
+                </RequirePermission>
               </SubscriptionGate>
             }
           />
@@ -222,9 +241,11 @@ const AppRoutes = () => {
             path="/receipts"
             element={
               <SubscriptionGate>
-                <MainLayout>
-                  <ReceiptsPage />
-                </MainLayout>
+                <RequirePermission permission="allowEditReceipt">
+                  <MainLayout>
+                    <ReceiptsPage />
+                  </MainLayout>
+                </RequirePermission>
               </SubscriptionGate>
             }
           />
@@ -232,9 +253,11 @@ const AppRoutes = () => {
             path="/reports"
             element={
               <SubscriptionGate>
-                <MainLayout>
-                  <ReportsPage />
-                </MainLayout>
+                <RequirePermission permission="allowReports">
+                  <MainLayout>
+                    <ReportsPage />
+                  </MainLayout>
+                </RequirePermission>
               </SubscriptionGate>
             }
           />
@@ -242,9 +265,11 @@ const AppRoutes = () => {
             path="/expenses"
             element={
               <SubscriptionGate>
-                <MainLayout>
-                  <ExpensesPage />
-                </MainLayout>
+                <RequirePermission permission="allowReports">
+                  <MainLayout>
+                    <ExpensesPage />
+                  </MainLayout>
+                </RequirePermission>
               </SubscriptionGate>
             }
           />
@@ -252,9 +277,11 @@ const AppRoutes = () => {
             path="/settings"
             element={
               <SubscriptionGate>
-                <MainLayout>
-                  <SettingsPage />
-                </MainLayout>
+                <RequirePermission permission="allowSettings">
+                  <MainLayout>
+                    <SettingsPage />
+                  </MainLayout>
+                </RequirePermission>
               </SubscriptionGate>
             }
           />

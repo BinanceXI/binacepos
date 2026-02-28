@@ -8,6 +8,15 @@ import {
   supabaseAuthClient,
 } from "../_shared/supabase.ts";
 
+function normalizeRole(role: unknown) {
+  return String(role || "").trim().toLowerCase();
+}
+
+function isPlatformLikeRole(role: unknown) {
+  const r = normalizeRole(role);
+  return r === "platform_admin" || r === "master_admin" || r === "super_admin";
+}
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json(405, { error: "Method not allowed" });
@@ -41,26 +50,11 @@ serve(async (req: Request) => {
     if (callerErr) return json(500, { error: "Failed to check caller role" });
     if (!caller || caller.active === false) return json(403, { error: "Account disabled" });
 
-    const callerRole = String((caller as any)?.role || "");
-    const isPlatformAdmin = callerRole === "platform_admin";
+    const callerRole = normalizeRole((caller as any)?.role);
+    const isPlatformAdmin = isPlatformLikeRole(callerRole);
     const isBusinessAdmin = callerRole === "admin";
 
     if (!isPlatformAdmin && !isBusinessAdmin) return json(403, { error: "Admins only" });
-
-    // Demo guard: block staff management inside demo tenants (prevents abuse)
-    if (!isPlatformAdmin) {
-      const businessId = String((caller as any)?.business_id || "").trim();
-      if (businessId) {
-        const { data: biz, error: bizErr } = await admin
-          .from("businesses")
-          .select("is_demo")
-          .eq("id", businessId)
-          .maybeSingle();
-        if (bizErr) return json(500, { error: "Failed to check business" });
-        if ((biz as any)?.is_demo === true) return json(403, { error: "Not available in demo" });
-      }
-    }
-
 
     const body = await req.json().catch(() => ({} as any));
     const user_id = String(body?.user_id || "").trim();
@@ -85,7 +79,7 @@ serve(async (req: Request) => {
         });
       }
 
-      if (String((target as any)?.role || "") === "platform_admin") {
+      if (isPlatformLikeRole((target as any)?.role)) {
         return json(403, { error: "Not allowed" });
       }
       if (String((target as any)?.business_id || "") !== callerBusinessId) {

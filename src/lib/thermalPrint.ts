@@ -8,6 +8,34 @@ import { buildReceiptPrintModel, type ReceiptStoreSettings } from "@/core/receip
 export const PRINTER_MODE_KEY = "binancexi_printer_mode"; // "browser" | "tcp" | "bt"
 export const PRINTER_IP_KEY = "binancexi_printer_ip"; // e.g. 192.168.1.50
 export const PRINTER_PORT_KEY = "binancexi_printer_port"; // usually 9100
+export const PRINTER_TRANSPORT_KEY = "binancexi_printer_transport"; // "tcp" | "serial" | "spooler" | "browser" | "bt"
+export const PRINTER_SERIAL_PORT_KEY = "binancexi_printer_serial_port"; // e.g. COM5
+export const PRINTER_SERIAL_BAUD_KEY = "binancexi_printer_serial_baud"; // e.g. 9600
+export const PRINTER_SPOOLER_PRINTER_KEY = "binancexi_printer_spooler_name"; // Windows printer name
+export const PRINTER_AUTO_PRINT_SALES_KEY = "binancexi_printer_auto_print_sales"; // "1" | "0"
+export const PRINTER_FALLBACK_BROWSER_KEY = "binancexi_printer_fallback_browser"; // "1" | "0"
+
+type PrinterTransport = "browser" | "tcp" | "bt" | "serial" | "spooler";
+
+export type PrinterOverrides = {
+  transport?: PrinterTransport;
+  tcp_host?: string;
+  tcp_port?: number;
+  serial_port?: string;
+  serial_baud?: number;
+  spooler_printer_name?: string;
+  fallback_to_browser?: boolean;
+};
+
+type PrinterConfig = {
+  transport: PrinterTransport;
+  tcp_host: string;
+  tcp_port: number;
+  serial_port: string;
+  serial_baud: number;
+  spooler_printer_name: string;
+  fallback_to_browser: boolean;
+};
 
 const encoder = new TextEncoder();
 const ESC = 0x1b;
@@ -29,15 +57,47 @@ function isTauriRuntime() {
   );
 }
 
-function normalizePrinterMode(rawMode: string, platform: string): "browser" | "tcp" | "bt" {
+function normalizePrinterMode(rawMode: string, platform: string, tauriRuntime = false): PrinterTransport {
   const mode = String(rawMode || "").trim().toLowerCase();
   if (platform === "android") {
     if (mode === "tcp" || mode === "bt") return mode;
     return "bt";
   }
   // desktop/web
-  if (mode === "browser" || mode === "tcp") return mode;
+  if (mode === "browser" || mode === "tcp" || mode === "serial" || mode === "spooler") return mode;
+  if (mode === "bt" && tauriRuntime) return "bt";
   return "browser";
+}
+
+function loadPrinterConfig(platform: string, tauriRuntime: boolean, overrides?: PrinterOverrides): PrinterConfig {
+  const legacyMode = String(localStorage.getItem(PRINTER_MODE_KEY) || "").trim();
+  const transportRaw = String(localStorage.getItem(PRINTER_TRANSPORT_KEY) || legacyMode || "").trim();
+  const transport = normalizePrinterMode(transportRaw || (platform === "android" ? "bt" : "browser"), platform, tauriRuntime);
+  const tcp_host = String(localStorage.getItem(PRINTER_IP_KEY) || "").trim();
+  const tcp_port = Number(localStorage.getItem(PRINTER_PORT_KEY) || "9100");
+  const serial_port = String(localStorage.getItem(PRINTER_SERIAL_PORT_KEY) || "").trim();
+  const serial_baud = Number(localStorage.getItem(PRINTER_SERIAL_BAUD_KEY) || "9600");
+  const spooler_printer_name = String(localStorage.getItem(PRINTER_SPOOLER_PRINTER_KEY) || "").trim();
+  const fallbackToBrowserRaw = localStorage.getItem(PRINTER_FALLBACK_BROWSER_KEY);
+  const fallback_to_browser =
+    fallbackToBrowserRaw == null ? true : ["1", "true", "yes"].includes(String(fallbackToBrowserRaw).toLowerCase());
+
+  return {
+    transport: overrides?.transport || transport,
+    tcp_host: String(overrides?.tcp_host ?? tcp_host).trim(),
+    tcp_port: Number(overrides?.tcp_port ?? tcp_port ?? 9100),
+    serial_port: String(overrides?.serial_port ?? serial_port).trim(),
+    serial_baud: Number(overrides?.serial_baud ?? serial_baud ?? 9600),
+    spooler_printer_name: String(overrides?.spooler_printer_name ?? spooler_printer_name).trim(),
+    fallback_to_browser:
+      typeof overrides?.fallback_to_browser === "boolean" ? overrides.fallback_to_browser : fallback_to_browser,
+  };
+}
+
+export function isAutoPrintSalesEnabled() {
+  const raw = localStorage.getItem(PRINTER_AUTO_PRINT_SALES_KEY);
+  if (raw == null) return true;
+  return ["1", "true", "yes"].includes(String(raw).trim().toLowerCase());
 }
 
 function leftRight(left: string, right: string, width = 32) {
@@ -645,9 +705,60 @@ async function sendTcpDesktopViaTauri(ip: string, port: number, data: Uint8Array
   }
 }
 
-export async function printReceiptSmart(d: ThermalReceiptData) {
+async function sendSerialDesktopViaTauri(port: string, baud: number, data: Uint8Array) {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("serial_print_escpos", { port, baud, data: Array.from(data) });
+  } catch (e: any) {
+    throw new Error(e?.message || "Tauri serial print failed");
+  }
+}
+
+async function sendSpoolerDesktopViaTauri(printer_name: string, data: Uint8Array) {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("spooler_print_raw", { printer_name, data: Array.from(data) });
+  } catch (e: any) {
+    throw new Error(e?.message || "Tauri spooler print failed");
+  }
+}
+
+export type SerialPortInfo = {
+  port_name: string;
+  port_type: string;
+  manufacturer?: string | null;
+  product?: string | null;
+  serial_number?: string | null;
+  vid?: number | null;
+  pid?: number | null;
+};
+
+export async function listSerialPorts(): Promise<SerialPortInfo[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const rows = await invoke<SerialPortInfo[]>("list_serial_ports");
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function listWindowsPrinters(): Promise<string[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const rows = await invoke<string[]>("list_windows_printers");
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function printReceiptSmart(d: ThermalReceiptData, overrides?: PrinterOverrides) {
   const platform = Capacitor.getPlatform();
   const tauriRuntime = isTauriRuntime();
+  const printer = loadPrinterConfig(platform, tauriRuntime, overrides);
   const model = buildCanonicalReceiptModel(d);
   const debugEnabled =
     !!(import.meta as any)?.env?.DEV || localStorage.getItem("binancexi_debug_receipt_qr") === "1";
@@ -656,29 +767,26 @@ export async function printReceiptSmart(d: ThermalReceiptData) {
       receiptId: model.meta.receiptId,
       receiptNumber: model.meta.receiptNumber,
       verificationPayload: model.verification.payload,
+      printer,
     });
   }
-
-  // Default modes:
-  // - Android -> bt (no popup)
-  // - Desktop -> browser
-  const storedMode = (localStorage.getItem(PRINTER_MODE_KEY) || "").trim();
-  const mode = normalizePrinterMode(storedMode || (platform === "android" ? "bt" : "browser"), platform);
 
   const escpos = await buildEscPos(d);
 
   // ✅ ANDROID
   if (platform === "android") {
-    if (mode === "bt") {
+    if (printer.transport === "bt") {
       await printToBluetooth58mm(escpos, { chunkSize: 800, chunkDelayMs: 35, retries: 3 });
       return;
     }
 
-    // tcp mode
-    const ip = (localStorage.getItem(PRINTER_IP_KEY) || "").trim();
-    const port = Number(localStorage.getItem(PRINTER_PORT_KEY) || "9100");
+    // Android supports BT + TCP in this app.
+    const ip = printer.tcp_host;
+    const port = printer.tcp_port;
     if (!ip) {
-      // Safe fallback: many devices are configured for BT but left on TCP accidentally.
+      if (printer.fallback_to_browser === false) {
+        throw new Error("Printer IP not set for Android TCP mode");
+      }
       await printToBluetooth58mm(escpos, { chunkSize: 800, chunkDelayMs: 35, retries: 3 });
       return;
     }
@@ -686,46 +794,38 @@ export async function printReceiptSmart(d: ThermalReceiptData) {
     return;
   }
 
-  // ✅ DESKTOP / WINDOWS
-  if (mode === "browser") {
-    // Windows app: if IP is configured, prefer native TCP print first.
-    if (tauriRuntime) {
-      const ip = (localStorage.getItem(PRINTER_IP_KEY) || "").trim();
-      const port = Number(localStorage.getItem(PRINTER_PORT_KEY) || "9100");
-      if (ip) {
-        try {
-          await sendTcpDesktopViaTauri(ip, port, escpos);
-          return;
-        } catch (e) {
-          console.warn("[print] tauri tcp from browser-mode failed, falling back to browser print:", e);
-        }
-      }
+  if (tauriRuntime) {
+    if (printer.transport === "tcp") {
+      if (!printer.tcp_host) throw new Error("Printer IP not set for TCP transport");
+      await sendTcpDesktopViaTauri(printer.tcp_host, printer.tcp_port, escpos);
+      return;
     }
-    await printBrowserReceipt(d);
-    return;
-  }
-
-  if (mode === "tcp") {
-    const ip = (localStorage.getItem(PRINTER_IP_KEY) || "").trim();
-    const port = Number(localStorage.getItem(PRINTER_PORT_KEY) || "9100");
-    if (!ip) {
-      if (tauriRuntime) throw new Error("Printer IP not set for TCP mode");
+    if (printer.transport === "serial" || printer.transport === "bt") {
+      if (!printer.serial_port) throw new Error("Serial/COM port not set");
+      await sendSerialDesktopViaTauri(printer.serial_port, printer.serial_baud, escpos);
+      return;
+    }
+    if (printer.transport === "spooler") {
+      if (!printer.spooler_printer_name) throw new Error("Windows printer name not set");
+      await sendSpoolerDesktopViaTauri(printer.spooler_printer_name, escpos);
+      return;
+    }
+    if (printer.transport === "browser") {
       await printBrowserReceipt(d);
       return;
     }
+  }
 
-    // Silent thermal print in Tauri desktop.
-    if (tauriRuntime) {
-      await sendTcpDesktopViaTauri(ip, port, escpos);
-      return;
-    }
-
-    // Browser fallback (can't open raw TCP sockets)
+  // Browser runtime: explicit fallback only.
+  if (printer.transport === "browser") {
     await printBrowserReceipt(d);
     return;
   }
-
-  await printBrowserReceipt(d);
+  if (printer.fallback_to_browser) {
+    await printBrowserReceipt(d);
+    return;
+  }
+  throw new Error(`Transport '${printer.transport}' requires desktop runtime`);
 }
 
 // --------------------
