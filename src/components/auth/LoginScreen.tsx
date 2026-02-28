@@ -320,14 +320,20 @@ export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
 
       if (localUser) {
         let cloudUser: Awaited<ReturnType<typeof ensureOnlineSession>> | null = null;
-        const isPlatformAdmin = ["platform_admin", "master_admin", "super_admin"].includes(
-          String((localUser as any)?.role || "").trim().toLowerCase()
+        const localRole = String((localUser as any)?.role || "").trim().toLowerCase();
+        const requiresCloudSession = ["platform_admin", "master_admin", "super_admin", "admin"].includes(
+          localRole
         );
-        if (isPlatformAdmin) {
+        const roleLabel = requiresCloudSession
+          ? localRole === "admin"
+            ? "Admin"
+            : "Platform admin"
+          : "User";
+        if (requiresCloudSession) {
           if (!navigator.onLine) {
-            throw new Error("Platform admin requires an internet connection. Connect and sign in again.");
+            throw new Error(`${roleLabel} requires an internet connection. Connect and sign in again.`);
           }
-          // Platform admin must have a cloud session; do not allow local-only sign-in.
+          // Admin-grade roles must have a cloud session; do not allow local-only sign-in.
           cloudUser = await ensureOnlineSession(u, password);
         } else if (navigator.onLine) {
           try {
@@ -348,7 +354,6 @@ export const LoginScreen = ({ onLogin }: { onLogin: () => void }) => {
             toast.warning(`Signed in locally. Cloud session unavailable: ${cloudErr?.message || "Unknown error"}`);
           }
         }
-
         const effectiveUser = cloudUser
           ? {
               id: cloudUser.id,

@@ -160,6 +160,7 @@ async function main() {
     allowVoid: true,
     allowPriceEdit: true,
     allowDiscount: true,
+    allowServiceBookings: true,
     allowReports: true,
     allowInventory: true,
     allowSettings: true,
