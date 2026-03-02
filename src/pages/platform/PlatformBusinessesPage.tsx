@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { supabase } from "@/lib/supabase";
+import { invokeWithAuthRecovery } from "@/lib/edgeFunctions";
 import {
   clampMoney,
   computeBusinessLicenseState,
@@ -550,7 +551,7 @@ export function PlatformBusinessesPage() {
 
     try {
       if (!(await requirePlatformCloudSession())) return;
-      const { data, error } = await supabase.functions.invoke("create_staff_user", {
+      const data = await invokeWithAuthRecovery("create_staff_user", {
         body: {
           business_id: selected.id,
           username,
@@ -570,7 +571,6 @@ export function PlatformBusinessesPage() {
           },
         },
       });
-      if (error) throw error;
       if ((data as any)?.error) throw new Error((data as any).error);
       toast.success(`Created admin @${username}`);
       setNewAdminFullName("");

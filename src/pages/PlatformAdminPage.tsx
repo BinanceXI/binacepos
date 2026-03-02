@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { BRAND } from "@/lib/brand";
 import { ensureSupabaseSession } from "@/lib/supabaseSession";
+import { invokeWithAuthRecovery } from "@/lib/edgeFunctions";
 import {
   computePlanPricing,
   DEFAULT_PRICING_PLANS,
@@ -140,8 +141,23 @@ function friendlyAdminError(e: any) {
   if (status === 401)
     return "Cloud session missing. Sign out and sign in again while online.";
   if (status === 403) return "Access denied.";
+  if (status === 400 && lower.includes("duplicate")) {
+    return "Username already exists. Choose a different username.";
+  }
+  if (status === 400 && lower.includes("password")) {
+    return "Password does not meet policy. Use at least 6 characters.";
+  }
+  if (status === 400 && lower.includes("business_id")) {
+    return "Business scope is missing for this request.";
+  }
   if (lower.includes("missing or invalid user session")) {
     return "Cloud session missing. Sign out and sign in again while online.";
+  }
+  if (lower.includes("duplicate")) {
+    return "Username already exists. Choose a different username.";
+  }
+  if (lower.includes("account disabled")) {
+    return "Account disabled. Contact support.";
   }
 
   if (
@@ -521,7 +537,7 @@ export function PlatformAdminPage() {
   });
 
   const requireCloudSession = async () => {
-    const res = await ensureSupabaseSession();
+    const res = await ensureSupabaseSession({ verifyUser: true });
     if (res.ok) return true;
     toast.error(
       "Cloud session missing. Sign out and sign in again while online."
@@ -593,21 +609,16 @@ export function PlatformAdminPage() {
         allowEditReceipt: true,
       };
 
-      const { data: fnData, error: fnErr } = await supabase.functions.invoke(
-        "create_staff_user",
-        {
-          body: {
-            business_id: selected.business_id,
-            username,
-            password,
-            full_name,
-            role: "admin",
-            permissions: adminPerms,
-          },
-        }
-      );
-
-      if (fnErr) throw fnErr;
+      const fnData = await invokeWithAuthRecovery("create_staff_user", {
+        body: {
+          business_id: selected.business_id,
+          username,
+          password,
+          full_name,
+          role: "admin",
+          permissions: adminPerms,
+        },
+      });
       if ((fnData as any)?.error) throw new Error((fnData as any).error);
 
       toast.success(`Created admin @${username}`);

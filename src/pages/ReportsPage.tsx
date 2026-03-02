@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
-import { 
-  startOfDay, endOfDay, subDays, startOfMonth, startOfYear, 
+import {
+  startOfDay, endOfDay, startOfMonth,
   endOfMonth, format, parseISO
 } from 'date-fns';
 import { motion } from 'framer-motion';
@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
@@ -171,11 +172,27 @@ function normalizeStatus(raw: string | null | undefined) {
   return String(raw || "completed").trim().toLowerCase();
 }
 
+type ReportsPrefsLegacy = {
+  rangeType?: "today" | "week" | "month" | "year" | "custom";
+  from?: string;
+  to?: string;
+  staffFilter?: string;
+};
+
+type ReportsPrefsV2 = {
+  dateMode?: "day" | "range";
+  day?: string;
+  rangeFrom?: string | null;
+  rangeTo?: string | null;
+  staffFilterIds?: string[];
+};
+
 export const ReportsPage = () => {
   const { currentUser } = usePOS();
   const isAdmin = String(currentUser?.role || "").toLowerCase() === "admin";
   const staffSelfId = String(currentUser?.id || "");
-  const REPORT_PREFS_KEY = "binancexi_reports_prefs_v1";
+  const REPORT_PREFS_V1_KEY = "binancexi_reports_prefs_v1";
+  const REPORT_PREFS_KEY = "binancexi_reports_prefs_v2";
   const scope = useMemo(
     () =>
       resolveTenantScope(
@@ -191,24 +208,47 @@ export const ReportsPage = () => {
   const scopeKey = useMemo(() => tenantScopeKey(scope) || "global", [scope?.businessId, scope?.userId]);
 
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
-  const reportPrefs = useMemo(
-    () =>
-      readScopedJSON<{
-        rangeType?: 'today' | 'week' | 'month' | 'year' | 'custom';
-        from?: string;
-        to?: string;
-        staffFilter?: string;
-      }>(REPORT_PREFS_KEY, {}, { scope, migrateLegacy: true }),
-    [scope?.businessId, scope?.userId]
-  );
-  const [rangeType, setRangeType] = useState<'today' | 'week' | 'month' | 'year' | 'custom'>(
-    reportPrefs.rangeType || 'today'
-  );
-  const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined }>(() => ({
-    from: reportPrefs.from ? new Date(reportPrefs.from) : new Date(),
-    to: reportPrefs.to ? new Date(reportPrefs.to) : new Date(),
-  }));
-  const [staffFilter, setStaffFilter] = useState<string>(reportPrefs.staffFilter || "all");
+  const reportPrefs = useMemo(() => {
+    const current = readScopedJSON<ReportsPrefsV2>(REPORT_PREFS_KEY, {}, { scope, migrateLegacy: true });
+    if (Object.keys(current || {}).length > 0) return current;
+
+    const legacy = readScopedJSON<ReportsPrefsLegacy>(REPORT_PREFS_V1_KEY, {}, {
+      scope,
+      migrateLegacy: true,
+    });
+    const nowIso = new Date().toISOString();
+    const legacyFrom = String(legacy.from || nowIso);
+    const legacyTo = String(legacy.to || legacyFrom);
+    return {
+      dateMode: legacy.rangeType === "custom" ? "range" : "day",
+      day: legacyFrom,
+      rangeFrom: legacyFrom,
+      rangeTo: legacyTo,
+      staffFilterIds:
+        legacy.staffFilter && legacy.staffFilter !== "all" ? [String(legacy.staffFilter)] : [],
+    } as ReportsPrefsV2;
+  }, [scope?.businessId, scope?.userId]);
+
+  const [dateMode, setDateMode] = useState<"day" | "range">(reportPrefs.dateMode || "day");
+  const [day, setDay] = useState<Date>(() => {
+    const parsed = new Date(String(reportPrefs.day || new Date().toISOString()));
+    return Number.isFinite(parsed.getTime()) ? parsed : new Date();
+  });
+  const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined }>(() => {
+    const parsedFrom = reportPrefs.rangeFrom ? new Date(reportPrefs.rangeFrom) : day;
+    const from = Number.isFinite(parsedFrom.getTime()) ? parsedFrom : day;
+    const parsedTo = reportPrefs.rangeTo ? new Date(reportPrefs.rangeTo) : from;
+    const to = Number.isFinite(parsedTo.getTime()) ? parsedTo : from;
+    return { from, to };
+  });
+  const [staffFilterIds, setStaffFilterIds] = useState<string[]>(() => {
+    if (!isAdmin) return staffSelfId ? [staffSelfId] : [];
+    const fromPrefs = Array.isArray(reportPrefs.staffFilterIds)
+      ? reportPrefs.staffFilterIds.map((id) => String(id)).filter(Boolean)
+      : [];
+    return Array.from(new Set(fromPrefs));
+  });
+  const [staffSearch, setStaffSearch] = useState("");
   const [offlineBanner, setOfflineBanner] = useState<string | null>(null);
 
   const updateOfflineBanner = useCallback((next: string | null) => {
@@ -244,25 +284,29 @@ export const ReportsPage = () => {
   });
 
   useEffect(() => {
-    if (isAdmin) {
-      setStaffFilter((prev) => (prev ? prev : "all"));
-      return;
-    }
-    if (staffSelfId) setStaffFilter(staffSelfId);
+    if (isAdmin) return;
+    if (staffSelfId) setStaffFilterIds([staffSelfId]);
   }, [isAdmin, staffSelfId]);
+
+  useEffect(() => {
+    if (!isAdmin || !staffFilterIds.length) return;
+    const known = new Set(staffOptions.map((s) => String(s.id)));
+    setStaffFilterIds((prev) => prev.filter((id) => known.has(id)));
+  }, [isAdmin, staffOptions, staffFilterIds.length]);
 
   useEffect(() => {
     writeScopedJSON(
       REPORT_PREFS_KEY,
       {
-        rangeType,
-        from: dateRange.from?.toISOString() || null,
-        to: dateRange.to?.toISOString() || null,
-        staffFilter,
+        dateMode,
+        day: day.toISOString(),
+        rangeFrom: dateRange.from?.toISOString() || null,
+        rangeTo: dateRange.to?.toISOString() || null,
+        staffFilterIds: isAdmin ? staffFilterIds : staffSelfId ? [staffSelfId] : [],
       },
       { scope }
     );
-  }, [scope?.businessId, scope?.userId, rangeType, dateRange.from, dateRange.to, staffFilter]);
+  }, [scope?.businessId, scope?.userId, dateMode, day, dateRange.from, dateRange.to, staffFilterIds, isAdmin, staffSelfId]);
 
   // --- P4 Widget: This month (Revenue vs Expenses) ---
   const monthRange = useMemo(() => {
@@ -374,16 +418,20 @@ export const ReportsPage = () => {
 
   // --- 1. FETCH REAL DATA ---
   const { data: salesData = [], isLoading } = useQuery({
-    queryKey: ['salesReport', scopeKey, rangeType, dateRange, isOnline],
+    queryKey: [
+      'salesReport',
+      scopeKey,
+      dateMode,
+      day.toISOString(),
+      dateRange.from?.toISOString() || null,
+      dateRange.to?.toISOString() || null,
+      isOnline,
+    ],
     queryFn: async () => {
-      const now = new Date();
-      let start = startOfDay(now);
-      let end = endOfDay(now);
+      let start = startOfDay(day);
+      let end = endOfDay(day);
 
-      if (rangeType === 'week') start = subDays(now, 7);
-      if (rangeType === 'month') start = startOfMonth(now);
-      if (rangeType === 'year') start = startOfYear(now);
-      if (rangeType === 'custom' && dateRange.from) {
+      if (dateMode === 'range' && dateRange.from) {
         start = startOfDay(dateRange.from);
         end = endOfDay(dateRange.to || dateRange.from);
       }
@@ -413,17 +461,26 @@ export const ReportsPage = () => {
     staleTime: 1000 * 60 * 5 // Cache for 5 mins
   });
 
-  const effectiveStaffFilter = isAdmin ? staffFilter : staffSelfId;
+  const effectiveStaffFilterIds = useMemo(
+    () =>
+      isAdmin
+        ? Array.from(new Set((staffFilterIds || []).map((id) => String(id)).filter(Boolean)))
+        : staffSelfId
+          ? [staffSelfId]
+          : [],
+    [isAdmin, staffFilterIds, staffSelfId]
+  );
   const filteredSalesData = useMemo(() => {
     const rows = (salesData as OrderRow[]) || [];
-    if (!effectiveStaffFilter || effectiveStaffFilter === "all") return rows;
-    return rows.filter((row) => String(row.cashier_id || "") === effectiveStaffFilter);
-  }, [salesData, effectiveStaffFilter]);
+    if (!effectiveStaffFilterIds.length) return rows;
+    const allowed = new Set(effectiveStaffFilterIds);
+    return rows.filter((row) => allowed.has(String(row.cashier_id || "")));
+  }, [salesData, effectiveStaffFilterIds]);
 
   // --- 2. CALCULATE METRICS ---
   const stats = useMemo(
-    () => calculateSalesStats(filteredSalesData as OrderRow[], rangeType as SalesRangeType),
-    [filteredSalesData, rangeType]
+    () => calculateSalesStats(filteredSalesData as OrderRow[], (dateMode === "range" ? "custom" : "today") as SalesRangeType),
+    [filteredSalesData, dateMode]
   );
 
   const staffDrilldown = useMemo(() => {
@@ -489,7 +546,53 @@ export const ReportsPage = () => {
     [filteredSalesData]
   );
 
+  const staffNameById = useMemo(() => {
+    return new Map(staffOptions.map((staff) => [String(staff.id), String(staff.full_name || "Staff")]));
+  }, [staffOptions]);
+
+  const selectedStaffLabel = useMemo(() => {
+    if (!isAdmin) return "My Sales Only";
+    if (!effectiveStaffFilterIds.length) return "All staff";
+    if (effectiveStaffFilterIds.length === 1) {
+      return staffNameById.get(effectiveStaffFilterIds[0]) || "1 staff";
+    }
+    return `${effectiveStaffFilterIds.length} staff selected`;
+  }, [effectiveStaffFilterIds, isAdmin, staffNameById]);
+
+  const visibleStaffOptions = useMemo(() => {
+    const q = staffSearch.trim().toLowerCase();
+    if (!q) return staffOptions;
+    return staffOptions.filter((staff) => {
+      const name = String(staff.full_name || "").toLowerCase();
+      const role = String(staff.role || "").toLowerCase();
+      return name.includes(q) || role.includes(q);
+    });
+  }, [staffOptions, staffSearch]);
+
+  const toggleStaffFilterId = useCallback((id: string) => {
+    const safeId = String(id || "").trim();
+    if (!safeId || !isAdmin) return;
+    setStaffFilterIds((prev) =>
+      prev.includes(safeId) ? prev.filter((x) => x !== safeId) : [...prev, safeId]
+    );
+  }, [isAdmin]);
+
+  const clearStaffFilters = useCallback(() => {
+    if (!isAdmin) return;
+    setStaffFilterIds([]);
+  }, [isAdmin]);
+
   const handleExportCSV = () => {
+    const dayTag = format(day, "yyyy-MM-dd");
+    const rangeFrom = dateRange.from ? format(dateRange.from, "yyyy-MM-dd") : dayTag;
+    const rangeTo = dateRange.to ? format(dateRange.to, "yyyy-MM-dd") : rangeFrom;
+    const dateTag = dateMode === "day" ? dayTag : `${rangeFrom}_to_${rangeTo}`;
+    const staffTag = !isAdmin
+      ? "self"
+      : effectiveStaffFilterIds.length === 0
+        ? "all_staff"
+        : `${effectiveStaffFilterIds.length}_staff`;
+
     const csvContent = [
       ["Date", "Receipt Number", "Receipt ID", "Cashier", "Total", "Method", "Status", "Sale Type"],
       ...receiptRows.map((o: any) => [
@@ -510,7 +613,7 @@ export const ReportsPage = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `staff_report_${rangeType}_${effectiveStaffFilter || "all"}.csv`);
+    link.setAttribute("download", `staff_report_${dateTag}_${staffTag}.csv`);
     document.body.appendChild(link);
     link.click();
     toast.success("Report downloaded");
@@ -529,44 +632,36 @@ export const ReportsPage = () => {
         </div>
         
         <div className="flex flex-wrap items-center gap-2">
-          {/* Range Selector */}
-          <Select value={rangeType} onValueChange={(val: any) => setRangeType(val)}>
+          <Select value={dateMode} onValueChange={(val: "day" | "range") => setDateMode(val)}>
             <SelectTrigger className="w-[140px] bg-card h-9">
               <CalendarIcon className="w-4 h-4 mr-2 text-muted-foreground" />
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="today">Today</SelectItem>
-              <SelectItem value="week">This Week</SelectItem>
-              <SelectItem value="month">This Month</SelectItem>
-              <SelectItem value="year">This Year</SelectItem>
-              <SelectItem value="custom">Custom Range</SelectItem>
+              <SelectItem value="day">Single Day</SelectItem>
+              <SelectItem value="range">Date Range</SelectItem>
             </SelectContent>
           </Select>
 
-          {isAdmin ? (
-            <Select value={staffFilter} onValueChange={setStaffFilter}>
-              <SelectTrigger className="w-[220px] bg-card h-9">
-                <Users className="w-4 h-4 mr-2 text-muted-foreground" />
-                <SelectValue placeholder="All staff" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Staff</SelectItem>
-                {staffOptions.map((staff) => (
-                  <SelectItem key={staff.id} value={staff.id}>
-                    {staff.full_name || "Staff"} ({String(staff.role || "cashier")})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          {dateMode === "day" ? (
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="h-9 font-normal">
+                  {format(day, "LLL dd, y")}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="end">
+                <Calendar
+                  initialFocus
+                  mode="single"
+                  selected={day}
+                  onSelect={(picked) => {
+                    if (picked) setDay(picked);
+                  }}
+                />
+              </PopoverContent>
+            </Popover>
           ) : (
-            <Badge variant="outline" className="h-9 px-3 inline-flex items-center gap-2">
-              <Users className="w-4 h-4" /> My Sales Only
-            </Badge>
-          )}
-
-          {/* Custom Date Picker */}
-          {rangeType === 'custom' && (
             <Popover>
               <PopoverTrigger asChild>
                 <Button variant="outline" className="h-9 font-normal">
@@ -577,7 +672,7 @@ export const ReportsPage = () => {
                       format(dateRange.from, "LLL dd, y")
                     )
                   ) : (
-                    <span>Pick a date</span>
+                    <span>Pick a range</span>
                   )}
                 </Button>
               </PopoverTrigger>
@@ -592,6 +687,63 @@ export const ReportsPage = () => {
                 />
               </PopoverContent>
             </Popover>
+          )}
+
+          {isAdmin ? (
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="h-9 max-w-[220px] justify-start gap-2">
+                  <Users className="w-4 h-4" />
+                  <span className="truncate">{selectedStaffLabel}</span>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[320px] p-3" align="end">
+                <div className="space-y-3">
+                  <Input
+                    value={staffSearch}
+                    onChange={(e) => setStaffSearch(e.target.value)}
+                    placeholder="Search cashier..."
+                    className="h-9"
+                  />
+                  <div className="flex items-center justify-between">
+                    <Button type="button" variant="ghost" size="sm" onClick={clearStaffFilters}>
+                      All staff
+                    </Button>
+                    <Badge variant="outline">
+                      {effectiveStaffFilterIds.length === 0 ? "All" : `${effectiveStaffFilterIds.length} selected`}
+                    </Badge>
+                  </div>
+                  <div className="max-h-64 overflow-auto space-y-1 pr-1">
+                    {visibleStaffOptions.map((staff) => {
+                      const id = String(staff.id);
+                      const selected = effectiveStaffFilterIds.includes(id);
+                      return (
+                        <button
+                          key={id}
+                          type="button"
+                          onClick={() => toggleStaffFilterId(id)}
+                          className="w-full rounded-md border px-2 py-2 text-left text-sm hover:bg-muted/40"
+                        >
+                          <span className="flex items-center justify-between gap-2">
+                            <span className="truncate">
+                              {staff.full_name || "Staff"} ({String(staff.role || "cashier")})
+                            </span>
+                            <input type="checkbox" className="h-4 w-4" readOnly checked={selected} />
+                          </span>
+                        </button>
+                      );
+                    })}
+                    {visibleStaffOptions.length === 0 ? (
+                      <div className="text-xs text-muted-foreground px-1 py-2">No staff match this search.</div>
+                    ) : null}
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          ) : (
+            <Badge variant="outline" className="h-9 px-3 inline-flex items-center gap-2">
+              <Users className="w-4 h-4" /> My Sales Only
+            </Badge>
           )}
 
           <Button variant="outline" className="gap-2 h-9" onClick={handleExportCSV}>

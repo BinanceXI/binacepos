@@ -324,6 +324,8 @@ async function printHtmlInIframe(receiptHtml: string, paper: ReceiptPaperMm) {
     if (!doc) throw new Error("Unable to initialize print frame");
 
     const sharedStyles = collectHeadStyles();
+    const baseHref = String(document.baseURI || window.location.href || "").trim();
+    const widthCss = paperCssWidth(paper);
     doc.open();
     doc.write(`
       <!doctype html>
@@ -331,20 +333,42 @@ async function printHtmlInIframe(receiptHtml: string, paper: ReceiptPaperMm) {
         <head>
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <base href="${esc(baseHref)}" />
           ${sharedStyles}
           <style>
-            @page { size: ${paperCssWidth(paper)} auto; margin: 0; }
+            @page { size: ${widthCss} auto; margin: 0; }
+            :root {
+              --receipt-paper-width: ${widthCss};
+              color-scheme: light;
+            }
+            * {
+              box-sizing: border-box;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
             html, body {
               margin: 0 !important;
               padding: 0 !important;
-              width: ${paperCssWidth(paper)} !important;
+              width: ${widthCss} !important;
               background: #fff !important;
               color: #000 !important;
+              font-family: "JetBrains Mono", "Courier New", monospace !important;
+              font-size: 11px;
+              line-height: 1.3;
             }
             #receipt-print-area {
-              width: ${paperCssWidth(paper)} !important;
+              width: ${widthCss} !important;
+              max-width: ${widthCss} !important;
               margin: 0 !important;
               padding: 0 !important;
+              display: block !important;
+            }
+            #receipt-print-area img {
+              max-width: 100%;
+              height: auto;
+            }
+            #receipt-print-area .font-mono {
+              font-family: "JetBrains Mono", "Courier New", monospace !important;
             }
           </style>
         </head>
@@ -633,7 +657,9 @@ async function printBrowserReceipt(d?: ThermalReceiptData, paper: ReceiptPaperMm
   el.style.left = "-9999px";
   el.style.top = "0";
   el.style.width = paperCssWidth(paper);
+  el.style.maxWidth = paperCssWidth(paper);
   el.style.overflow = "visible";
+  el.style.setProperty("--receipt-paper-width", paperCssWidth(paper));
 
   try {
     // Give React/layout time to flush.
@@ -695,7 +721,10 @@ async function printBrowserReceipt(d?: ThermalReceiptData, paper: ReceiptPaperMm
 
     await new Promise<void>((r) => requestAnimationFrame(() => r()));
 
-    const htmlToPrint = (el.innerHTML || "").trim();
+    let htmlToPrint = (el.innerHTML || "").trim();
+    if (!htmlToPrint && d) {
+      htmlToPrint = buildFallbackReceiptHtml(d, paper);
+    }
     if (!htmlToPrint) throw new Error("Receipt content is empty");
     await printHtmlInIframe(htmlToPrint, paper);
   } finally {

@@ -1033,8 +1033,8 @@ const [showMobileCart, setShowMobileCart] = useState(false);
 
       {/* LEFT COLUMN */}
 <div className="flex-1 flex flex-col min-w-0 bg-slate-50/50 dark:bg-slate-950/50">
-        <div className="p-2 sm:p-3 bg-card border-b border-border flex justify-between items-center gap-2 sm:gap-3 shadow-sm z-10">
-          <div className="text-xs font-mono bg-muted px-2 py-1 rounded flex items-center gap-2">
+        <div className="p-2 sm:p-3 bg-card border-b border-border flex flex-wrap items-center gap-2 sm:gap-3 shadow-sm z-10">
+          <div className="w-full sm:w-auto text-xs font-mono bg-muted px-2 py-1 rounded flex items-center gap-2">
             <span
               className={cn(
                 "w-2 h-2 rounded-full",
@@ -1076,7 +1076,7 @@ const [showMobileCart, setShowMobileCart] = useState(false);
             </Button>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="w-full sm:w-auto flex items-center justify-end gap-2">
             {canDiscount && (
               <Button
                 size="sm"
@@ -1086,7 +1086,6 @@ const [showMobileCart, setShowMobileCart] = useState(false);
                 title="Discount code"
               >
                 <Percent className="w-3.5 h-3.5" />
-                <span className="inline sm:hidden">Disc</span>
                 <span className="hidden sm:inline">Discount</span>
               </Button>
             )}
@@ -1101,7 +1100,7 @@ const [showMobileCart, setShowMobileCart] = useState(false);
               }}
             >
               <ScanLine className="w-4 h-4" />
-              <span className="inline sm:hidden">Scan</span>
+              <span className="hidden sm:inline">Scan</span>
             </Button>
           </div>
         </div>
@@ -1326,7 +1325,7 @@ const [showMobileCart, setShowMobileCart] = useState(false);
         <DrawerContent className="lg:hidden h-[85dvh] overflow-hidden pb-[env(safe-area-inset-bottom)]">
           <div className="flex flex-col h-full bg-card">
             <DrawerHeader className="text-left pb-2">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                 <DrawerTitle className="flex items-center gap-2 min-w-0">
                   <ShoppingCart className="w-5 h-5 text-primary shrink-0" />
                   <span className="truncate">Current Sale</span>
@@ -1335,7 +1334,7 @@ const [showMobileCart, setShowMobileCart] = useState(false);
                   </span>
                 </DrawerTitle>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
                   {cart.length > 0 && (
                     <Button
                       variant="ghost"

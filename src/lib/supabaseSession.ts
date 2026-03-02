@@ -5,6 +5,12 @@ export type EnsureSupabaseSessionResult =
   | { ok: true; session: Session }
   | { ok: false; error: string };
 
+export type EnsureSupabaseSessionOptions = {
+  forceRefresh?: boolean;
+  verifyUser?: boolean;
+  refreshLeewayMs?: number;
+};
+
 export type SyncBlockedReason = "AUTH_REQUIRED";
 
 export type RequireAuthedSessionOrBlockSyncResult =
@@ -31,39 +37,72 @@ export function isLikelyAuthError(err: any) {
     msg.includes("jwt") ||
     msg.includes("unauthorized") ||
     msg.includes("not authorized") ||
-    msg.includes("permission denied")
+    msg.includes("permission denied") ||
+    msg.includes("missing or invalid user session") ||
+    msg.includes("invalid user session")
   );
 }
 
+function messageFromAuthError(err: any, fallback: string) {
+  return String(err?.message || "").trim() || fallback;
+}
+
+async function verifyActiveUserFromSession() {
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data?.user?.id) {
+    return { ok: false as const, error: messageFromAuthError(error, "Invalid user session") };
+  }
+  return { ok: true as const };
+}
+
 // Best-effort: ensure we have a valid Supabase session for RLS-protected writes.
-export async function ensureSupabaseSession(): Promise<EnsureSupabaseSessionResult> {
+export async function ensureSupabaseSession(
+  opts?: EnsureSupabaseSessionOptions
+): Promise<EnsureSupabaseSessionResult> {
   try {
+    const forceRefresh = !!opts?.forceRefresh;
+    const verifyUser = opts?.verifyUser !== false;
+    const refreshLeewayMs = Math.max(1, Number(opts?.refreshLeewayMs ?? 60_000));
+
     const { data, error } = await supabase.auth.getSession();
     if (error) return { ok: false, error: error.message || "Failed to get session" };
 
-    if (data.session) {
-      // If the token is close to expiring, refresh once to avoid 401s during sync bursts.
-      if (!sessionExpiresSoon(data.session, 60_000)) return { ok: true, session: data.session };
+    let session = data.session || null;
+    const needsRefresh =
+      forceRefresh || !session || sessionExpiresSoon(session, refreshLeewayMs);
 
+    if (needsRefresh) {
       const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
       if (refreshErr) return { ok: false, error: refreshErr.message || "Failed to refresh session" };
-      if (refreshed.session) return { ok: true, session: refreshed.session };
+      session = refreshed.session || null;
+    }
+
+    if (!session) {
       return { ok: false, error: "No active session" };
     }
 
-    // No session found: try refresh (works if a refresh token is persisted).
-    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-    if (refreshErr) return { ok: false, error: refreshErr.message || "Failed to refresh session" };
-    if (refreshed.session) return { ok: true, session: refreshed.session };
+    if (!verifyUser) return { ok: true, session };
 
-    return { ok: false, error: "No active session" };
+    // Verify token validity by reading the active auth user.
+    const firstCheck = await verifyActiveUserFromSession();
+    if (firstCheck.ok) return { ok: true, session };
+
+    // Retry exactly once with a forced refresh for stale/invalid JWT scenarios.
+    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+    if (refreshErr) return { ok: false, error: refreshErr.message || firstCheck.error };
+    if (!refreshed.session) return { ok: false, error: "No active session" };
+
+    const secondCheck = await verifyActiveUserFromSession();
+    if (!secondCheck.ok) return { ok: false, error: secondCheck.error };
+
+    return { ok: true, session: refreshed.session };
   } catch (e: any) {
     return { ok: false, error: e?.message || "Failed to ensure session" };
   }
 }
 
 export async function requireAuthedSessionOrBlockSync(): Promise<RequireAuthedSessionOrBlockSyncResult> {
-  const sessionRes = await ensureSupabaseSession();
+  const sessionRes = await ensureSupabaseSession({ verifyUser: true });
   if (!sessionRes.ok) {
     return { ok: false, reason: "AUTH_REQUIRED", message: SYNC_PAUSED_AUTH_MESSAGE };
   }

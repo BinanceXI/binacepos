@@ -10,8 +10,23 @@ export function friendlyAdminError(e: any) {
     return "Cloud session missing. Sign out and sign in again while online.";
   }
   if (status === 403) return "Access denied.";
+  if (status === 400 && lower.includes("duplicate")) {
+    return "Username already exists. Choose a different username.";
+  }
+  if (status === 400 && lower.includes("password")) {
+    return "Password does not meet policy. Use at least 6 characters.";
+  }
+  if (status === 400 && lower.includes("business_id")) {
+    return "Business scope is missing for this request.";
+  }
   if (lower.includes("missing or invalid user session")) {
     return "Cloud session missing. Sign out and sign in again while online.";
+  }
+  if (lower.includes("duplicate")) {
+    return "Username already exists. Choose a different username.";
+  }
+  if (lower.includes("account disabled")) {
+    return "Account disabled. Contact support.";
   }
   if (
     lower.includes("foreign key") ||
@@ -25,7 +40,7 @@ export function friendlyAdminError(e: any) {
 }
 
 export async function requirePlatformCloudSession() {
-  const res = await ensureSupabaseSession();
+  const res = await ensureSupabaseSession({ verifyUser: true });
   if (res.ok) return true;
   toast.error("Cloud session missing. Sign out and sign in again while online.");
   return false;

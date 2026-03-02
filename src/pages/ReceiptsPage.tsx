@@ -951,7 +951,7 @@ const testThermalPrint = async () => {
         </div>
 
         {/* Tabs */}
-        <div className="flex p-1 bg-slate-900/50 border border-slate-800 rounded-xl w-fit backdrop-blur-md">
+        <div className="flex p-1 bg-slate-900/50 border border-slate-800 rounded-xl w-full sm:w-fit backdrop-blur-md">
           <TabButton active={activeTab === "settings"} onClick={() => setActiveTab("settings")} icon={FileImage} label="Settings" />
           <TabButton active={activeTab === "receipts"} onClick={() => setActiveTab("receipts")} icon={Receipt} label="Receipts" />
         </div>
@@ -967,7 +967,7 @@ const testThermalPrint = async () => {
               className="space-y-5"
             >
               <SettingsCard title="Store Identity" icon={Settings2}>
-                <div className="space-y-4 rounded-xl border border-slate-800 bg-slate-950/40 p-4">
+                <div className="space-y-4 rounded-xl border border-slate-800 bg-slate-950/40 p-3 md:p-4">
                   <div className="flex items-center gap-2">
                     <Printer className="h-4 w-4 text-blue-400" />
                     <h4 className="text-sm font-semibold text-white">Thermal Printer</h4>
@@ -1140,12 +1140,12 @@ const testThermalPrint = async () => {
                       </div>
                     ) : null}
 
-                    <div className="flex gap-2">
-                      <Button onClick={savePrinterSettings} className="flex-1" disabled={!isAdmin}>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <Button onClick={savePrinterSettings} className="w-full sm:flex-1" disabled={!isAdmin}>
                         Save Printer
                       </Button>
 
-                      <Button onClick={testThermalPrint} variant="outline" className="flex-1">
+                      <Button onClick={testThermalPrint} variant="outline" className="w-full sm:flex-1">
                         Test Print
                       </Button>
                     </div>
@@ -1302,8 +1302,8 @@ const testThermalPrint = async () => {
                   </span>
                 </div>
 
-                <div className="flex gap-2">
-                  <div className="relative flex-1 min-w-[240px]">
+                <div className="flex flex-col sm:flex-row gap-2 w-full">
+                  <div className="relative flex-1 min-w-0 sm:min-w-[240px]">
                     <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
                     <Input
                       value={q}
@@ -1322,7 +1322,7 @@ const testThermalPrint = async () => {
 
                   <Button
                     variant="outline"
-                    className="border-slate-700 text-slate-300 hover:text-white"
+                    className="border-slate-700 text-slate-300 hover:text-white w-full sm:w-auto"
                     onClick={() => refetch()}
                     disabled={!isOnline}
                     title={!isOnline ? "Offline" : "Refresh receipts"}
@@ -1363,12 +1363,12 @@ const testThermalPrint = async () => {
                             )}
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-                            <Button size="sm" variant="outline" className="border-slate-700 text-slate-200 hover:text-white" onClick={() => copyText(verifyUrl)}>
+                          <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 w-full md:w-auto">
+                            <Button size="sm" variant="outline" className="border-slate-700 text-slate-200 hover:text-white w-full sm:w-auto" onClick={() => copyText(verifyUrl)}>
                               <Copy className="w-4 h-4 mr-2" /> Copy Verify Link
                             </Button>
 
-                            <Button size="sm" className="bg-white text-slate-900 hover:bg-slate-200" onClick={() => printOfflineReceipt(sale)}>
+                            <Button size="sm" className="bg-white text-slate-900 hover:bg-slate-200 w-full sm:w-auto" onClick={() => printOfflineReceipt(sale)}>
                               <Printer className="w-4 h-4 mr-2" /> Reprint
                             </Button>
 
@@ -1376,7 +1376,7 @@ const testThermalPrint = async () => {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="border-amber-500/40 text-amber-200 hover:text-white hover:bg-amber-500/10"
+                                className="border-amber-500/40 text-amber-200 hover:text-white hover:bg-amber-500/10 w-full sm:w-auto"
                                 onClick={() => {
                                   const ok = window.confirm(`Remove ${rnum} from offline queue?`);
                                   if (!ok) return;
@@ -1454,12 +1454,12 @@ const testThermalPrint = async () => {
                             )}
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-                            <Button size="sm" variant="outline" className="border-slate-700 text-slate-200 hover:text-white" onClick={() => copyText(verifyUrl)}>
+                          <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 w-full md:w-auto">
+                            <Button size="sm" variant="outline" className="border-slate-700 text-slate-200 hover:text-white w-full sm:w-auto" onClick={() => copyText(verifyUrl)}>
                               <Copy className="w-4 h-4 mr-2" /> Copy Link
                             </Button>
 
-                            <Button size="sm" className="bg-white text-slate-900 hover:bg-slate-200" onClick={() => printOnlineReceipt(row)}>
+                            <Button size="sm" className="bg-white text-slate-900 hover:bg-slate-200 w-full sm:w-auto" onClick={() => printOnlineReceipt(row)}>
                               <Printer className="w-4 h-4 mr-2" /> Reprint
                             </Button>
 
@@ -1467,7 +1467,7 @@ const testThermalPrint = async () => {
                               size="sm"
                               variant="outline"
                               className={cn(
-                                "border-red-500/40 text-red-200 hover:text-white hover:bg-red-500/10",
+                                "border-red-500/40 text-red-200 hover:text-white hover:bg-red-500/10 w-full sm:w-auto",
                                 (!canVoid || isVoided) && "opacity-50 pointer-events-none"
                               )}
                               title={!canVoid ? "Not allowed" : isVoided ? "Already voided" : "Void receipt"}
@@ -1480,7 +1480,7 @@ const testThermalPrint = async () => {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="border-slate-700 text-slate-200 hover:text-white hover:bg-slate-800/40"
+                                className="border-slate-700 text-slate-200 hover:text-white hover:bg-slate-800/40 w-full sm:w-auto"
                                 onClick={() => onDelete(row)}
                                 disabled={deleteReceiptMutation.isPending}
                                 title="Hard delete (admin)"
@@ -1542,13 +1542,13 @@ const testThermalPrint = async () => {
 
 const SettingsCard = ({ title, icon: Icon, children }: any) => (
   <motion.div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
-    <div className="px-6 py-4 border-b border-slate-800 flex items-center gap-3">
+    <div className="px-4 py-3 md:px-6 md:py-4 border-b border-slate-800 flex items-center gap-3">
       <div className="p-2 bg-blue-500/10 rounded-lg">
         <Icon className="h-5 w-5 text-blue-400" />
       </div>
       <h3 className="font-semibold text-white">{title}</h3>
     </div>
-    <div className="p-6">{children}</div>
+    <div className="p-4 md:p-6">{children}</div>
   </motion.div>
 );
 
@@ -1556,7 +1556,7 @@ const TabButton = ({ active, onClick, icon: Icon, label }: any) => (
   <button
     onClick={onClick}
     className={cn(
-      "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all",
+      "flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all",
       active ? "bg-slate-800 text-white shadow-sm" : "text-slate-400 hover:text-white hover:bg-slate-800/50"
     )}
     type="button"

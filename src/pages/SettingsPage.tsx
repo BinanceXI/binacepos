@@ -51,11 +51,13 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { usePOS } from "@/contexts/POSContext";
+import { callVerifyPassword } from "@/lib/auth/offlinePasswordAuth";
 import { hashPassword } from "@/lib/auth/passwordKdf";
 import { getLocalUser, renameLocalUser, upsertLocalUser } from "@/lib/auth/localUserStore";
 import { supabase } from "@/lib/supabase";
 import { EXPECTED_SUPABASE_REFS, getBackendInfo } from "@/lib/backendInfo";
-import { ensureSupabaseSession } from "@/lib/supabaseSession";
+import { invokeWithAuthRecovery } from "@/lib/edgeFunctions";
+import { ensureSupabaseSession, isLikelyAuthError } from "@/lib/supabaseSession";
 import { getConfiguredPublicAppUrl, normalizeBaseUrl } from "@/lib/verifyUrl";
 import { loadStoreSettingsWithBusinessFallback } from "@/lib/storeSettings";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -129,6 +131,10 @@ type UserPermissions = {
   allowEditReceipt?: boolean;
 };
 
+type PendingReauthAction =
+  | { type: "saveUser"; payload: any }
+  | { type: "quickCreate" };
+
 const DEFAULT_PERMS: Required<UserPermissions> = {
   allowRefunds: false,
   allowVoid: false,
@@ -172,7 +178,7 @@ function notifySettingsChanged() {
 
 function friendlyAdminError(e: any) {
   const status = (e as any)?.status;
-  const msg = String((e as any)?.message || "");
+  const msg = String((e as any)?.message || "").trim();
   const lower = msg.toLowerCase();
 
   // PostgREST often returns 404 for unauthorized RPCs.
@@ -181,12 +187,30 @@ function friendlyAdminError(e: any) {
   if (status === 401)
     return "Cloud session missing. Sign out and sign in again while online.";
   if (status === 403) return "Access denied.";
+  if (status === 400 && lower.includes("duplicate key value")) {
+    return "Username already exists. Choose a different username.";
+  }
+  if (status === 400 && lower.includes("username")) {
+    return msg;
+  }
+  if (status === 400 && lower.includes("business_id")) {
+    return "Business scope is missing for this admin account. Contact support.";
+  }
+  if (status === 400 && lower.includes("password")) {
+    return msg;
+  }
 
   if (
     lower.includes("missing or invalid user session") ||
     lower.includes("invalid user session")
   ) {
     return "Cloud session missing. Sign out and sign in again while online.";
+  }
+  if (lower.includes("duplicate key value")) {
+    return "Username already exists. Choose a different username.";
+  }
+  if (lower.includes("account disabled")) {
+    return "Account disabled. Contact your admin.";
   }
 
   if (
@@ -239,6 +263,11 @@ export const SettingsPage = () => {
   const [showUserDialog, setShowUserDialog] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [showReauthDialog, setShowReauthDialog] = useState(false);
+  const [reauthUsername, setReauthUsername] = useState("");
+  const [reauthPassword, setReauthPassword] = useState("");
+  const [reauthBusy, setReauthBusy] = useState(false);
+  const [pendingReauthAction, setPendingReauthAction] = useState<PendingReauthAction | null>(null);
 
   // settings form
   const [formData, setFormData] = useState<StoreSettings>({});
@@ -279,10 +308,20 @@ export const SettingsPage = () => {
   );
 
   const requireCloudSession = async () => {
-    const res = await ensureSupabaseSession();
+    const res = await ensureSupabaseSession({ verifyUser: true });
     if (res.ok) return;
     throw new Error("Cloud session missing. Sign out and sign in again while online.");
   };
+
+  const shouldOpenReauth = useCallback((err: any) => {
+    if ((err as any)?.isAuthError) return true;
+    return isLikelyAuthError(err);
+  }, []);
+
+  useEffect(() => {
+    const existing = sanitizeUsername((currentUser as any)?.username || "");
+    if (existing) setReauthUsername(existing);
+  }, [currentUser?.id, (currentUser as any)?.username]);
 
   /* ============================
      STORE SETTINGS (DB)
@@ -556,11 +595,9 @@ export const SettingsPage = () => {
         // Optional: password reset via Edge Function (hashed server-side)
         const nextPassword = String(data.password || "").trim();
         if (nextPassword.length >= 6) {
-          const { data: fnData, error: fnErr } = await supabase.functions.invoke(
-            "set_staff_password",
-            { body: { user_id: editingUser.id, password: nextPassword } }
-          );
-          if (fnErr) throw fnErr;
+          const fnData = await invokeWithAuthRecovery("set_staff_password", {
+            body: { user_id: editingUser.id, password: nextPassword },
+          });
           if ((fnData as any)?.error) throw new Error((fnData as any).error);
         }
 
@@ -594,20 +631,15 @@ export const SettingsPage = () => {
             }
           : { ...DEFAULT_PERMS, ...permissions };
 
-      const { data: fnData, error: fnErr } = await supabase.functions.invoke(
-        "create_staff_user",
-        {
-          body: {
-            username,
-            password,
-            full_name,
-            role,
-            permissions: perms,
-          },
-        }
-      );
-
-      if (fnErr) throw fnErr;
+      const fnData = await invokeWithAuthRecovery("create_staff_user", {
+        body: {
+          username,
+          password,
+          full_name,
+          role,
+          permissions: perms,
+        },
+      });
       if ((fnData as any)?.error) throw new Error((fnData as any).error);
     },
     onSuccess: async () => {
@@ -624,7 +656,16 @@ export const SettingsPage = () => {
         active: true,
       });
     },
-    onError: (err: any) => toast.error(friendlyAdminError(err) || "User save failed"),
+    onError: (err: any, variables: any) => {
+      if (shouldOpenReauth(err)) {
+        setPendingReauthAction({ type: "saveUser", payload: variables });
+        setReauthPassword("");
+        setShowReauthDialog(true);
+        toast.error("Cloud session expired. Re-authenticate to continue.");
+        return;
+      }
+      toast.error(friendlyAdminError(err) || "User save failed");
+    },
   });
 
   const quickCreateMutation = useMutation({
@@ -667,20 +708,15 @@ export const SettingsPage = () => {
               allowRefunds: !!quickRefunds,
             };
 
-      const { data: fnData, error: fnErr } = await supabase.functions.invoke(
-        "create_staff_user",
-        {
-          body: {
-            username,
-            password,
-            full_name,
-            role,
-            permissions: perms,
-          },
-        }
-      );
-
-      if (fnErr) throw fnErr;
+      const fnData = await invokeWithAuthRecovery("create_staff_user", {
+        body: {
+          username,
+          password,
+          full_name,
+          role,
+          permissions: perms,
+        },
+      });
       if ((fnData as any)?.error) throw new Error((fnData as any).error);
 
       return { username, password };
@@ -700,8 +736,74 @@ export const SettingsPage = () => {
       setQuickReports(false);
       setQuickRefunds(false);
     },
-    onError: (e: any) => toast.error(friendlyAdminError(e) || "Failed"),
+    onError: (e: any) => {
+      if (shouldOpenReauth(e)) {
+        setPendingReauthAction({ type: "quickCreate" });
+        setReauthPassword("");
+        setShowReauthDialog(true);
+        toast.error("Cloud session expired. Re-authenticate to continue.");
+        return;
+      }
+      toast.error(friendlyAdminError(e) || "Failed");
+    },
   });
+
+  const handleReauthAndRetry = async () => {
+    const enteredUsername = sanitizeUsername(reauthUsername);
+    const expectedUsername = sanitizeUsername((currentUser as any)?.username || "");
+    const password = String(reauthPassword || "");
+
+    if (!enteredUsername) {
+      toast.error("Enter your username");
+      return;
+    }
+    if (!password) {
+      toast.error("Enter your password");
+      return;
+    }
+    if (expectedUsername && enteredUsername !== expectedUsername) {
+      toast.error(`Use @${expectedUsername} to re-authenticate this admin session.`);
+      return;
+    }
+
+    setReauthBusy(true);
+    try {
+      const verify = await callVerifyPassword(enteredUsername, password);
+      if (!verify.ok) {
+        throw new Error(verify.error || "Invalid credentials");
+      }
+
+      const { data: otpData, error: otpErr } = await supabase.auth.verifyOtp({
+        token_hash: verify.token_hash,
+        type: verify.type,
+      });
+      if (otpErr) throw otpErr;
+
+      const session = otpData?.session || (await supabase.auth.getSession()).data.session;
+      if (!session?.access_token) {
+        throw new Error("Failed to refresh cloud session");
+      }
+
+      const action = pendingReauthAction;
+      setShowReauthDialog(false);
+      setReauthPassword("");
+      setPendingReauthAction(null);
+      toast.success("Cloud session refreshed");
+
+      if (!action) return;
+      if (action.type === "saveUser") {
+        saveUserMutation.mutate(action.payload);
+        return;
+      }
+      if (action.type === "quickCreate") {
+        quickCreateMutation.mutate();
+      }
+    } catch (e: any) {
+      toast.error(friendlyAdminError(e) || "Re-authentication failed");
+    } finally {
+      setReauthBusy(false);
+    }
+  };
 
   /* ============================
      ADMIN SELF CREDS
@@ -735,10 +837,9 @@ export const SettingsPage = () => {
       }
 
       if (myNewPassword) {
-        const { data: fnData, error: fnErr } = await supabase.functions.invoke("set_staff_password", {
+        const fnData = await invokeWithAuthRecovery("set_staff_password", {
           body: { user_id: currentUser.id, password: myNewPassword },
         });
-        if (fnErr) throw fnErr;
         if ((fnData as any)?.error) throw new Error((fnData as any).error);
 
         // Keep OFFLINE password login in sync for this device
@@ -962,7 +1063,7 @@ export const SettingsPage = () => {
     <div className="flex flex-col lg:flex-row h-full gap-4 p-3 md:p-6 bg-slate-50 dark:bg-slate-950 min-h-screen">
       {/* Sidebar (sticky on desktop) */}
       <div className="w-full lg:w-72 shrink-0">
-        <div className="lg:sticky lg:top-6 lg:h-[calc(100vh-3rem)] lg:overflow-y-auto rounded-2xl bg-white/60 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 p-3">
+        <div className="lg:sticky lg:top-6 lg:h-[calc(100vh-3rem)] lg:overflow-y-auto rounded-2xl bg-white/60 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 p-2.5 md:p-3">
           {/* Header */}
           <div className="flex items-center gap-3 px-1 mb-3">
             <BrandLogo className="text-xl" alt="BinanceXI POS" />
@@ -990,7 +1091,7 @@ export const SettingsPage = () => {
           </div>
 
           {/* Mobile: horizontal section bar */}
-          <div className="flex lg:hidden gap-2 overflow-x-auto pb-2 no-scrollbar">
+          <div className="flex lg:hidden gap-2 overflow-x-auto pb-1 no-scrollbar">
             {visibleSettingsSections.map((section) => (
               <button
                 key={section.id}
@@ -1216,14 +1317,14 @@ export const SettingsPage = () => {
             >
               {!isAdmin ? (
                 <Card>
-                  <CardContent className="p-6 text-sm text-muted-foreground">
+                  <CardContent className="p-4 md:p-6 text-sm text-muted-foreground">
                     Admins only.
                   </CardContent>
                 </Card>
               ) : (
                 <>
                   <Card className="border-primary/20">
-                    <CardHeader className="flex flex-row items-center justify-between">
+                    <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                       <CardTitle className="flex items-center gap-2">
                         <UserCog className="w-5 h-5" />
                         Quick Create Staff
@@ -1372,21 +1473,21 @@ export const SettingsPage = () => {
                   </Card>
 
                   <Card>
-                    <CardHeader className="flex flex-row items-center justify-between">
+                    <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                       <CardTitle>Staff</CardTitle>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
                         <div className="relative">
                           <Search className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
                           <Input
-                            className="pl-8 h-9 w-44 md:w-56"
+                            className="pl-8 h-9 w-full sm:w-44 md:w-56"
                             placeholder="Search staff…"
                             value={staffSearch}
                             onChange={(e) => setStaffSearch(e.target.value)}
                           />
                         </div>
-	                        <Button size="sm" className="gap-2" onClick={handleAddUser} disabled={!isOnline}>
-	                          <UserPlus className="w-4 h-4" /> Add
-	                        </Button>
+		                        <Button size="sm" className="gap-2 w-full sm:w-auto" onClick={handleAddUser} disabled={!isOnline}>
+		                          <UserPlus className="w-4 h-4" /> Add
+		                        </Button>
                       </div>
                     </CardHeader>
 
@@ -1409,7 +1510,7 @@ export const SettingsPage = () => {
                             <div
                               key={user.id}
                               className={cn(
-                                "flex items-center justify-between p-4 rounded-xl bg-card border border-border transition-colors",
+                                "flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 sm:p-4 rounded-xl bg-card border border-border transition-colors",
                                 !active && "opacity-70"
                               )}
                             >
@@ -1460,7 +1561,7 @@ export const SettingsPage = () => {
                                 </div>
                               </div>
 
-                              <div className="flex items-center gap-1 shrink-0">
+                              <div className="flex items-center justify-end gap-1 shrink-0 w-full sm:w-auto">
                                 <Button
                                   variant="ghost"
                                   size="icon"
@@ -1980,6 +2081,77 @@ export const SettingsPage = () => {
                 <Save className="w-4 h-4" />
               )}
               {editingUser ? "Save Changes" : "Create User"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showReauthDialog}
+        onOpenChange={(open) => {
+          if (reauthBusy) return;
+          setShowReauthDialog(open);
+          if (!open) {
+            setReauthPassword("");
+            setPendingReauthAction(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Re-authenticate Admin Session</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Your cloud session expired. Enter your admin credentials to continue the pending action.
+            </p>
+            <Field label="Username">
+              <Input
+                value={reauthUsername}
+                onChange={(e) => setReauthUsername(e.target.value)}
+                placeholder="admin username"
+                disabled={reauthBusy}
+              />
+            </Field>
+            <Field label="Password">
+              <Input
+                type="password"
+                value={reauthPassword}
+                onChange={(e) => setReauthPassword(e.target.value)}
+                placeholder="password"
+                disabled={reauthBusy}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleReauthAndRetry();
+                  }
+                }}
+              />
+            </Field>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={reauthBusy}
+              onClick={() => {
+                setShowReauthDialog(false);
+                setReauthPassword("");
+                setPendingReauthAction(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={() => void handleReauthAndRetry()} disabled={reauthBusy}>
+              {reauthBusy ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Verifying...
+                </>
+              ) : (
+                "Re-authenticate"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

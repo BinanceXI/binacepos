@@ -729,8 +729,8 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
                 .select("id")
                 .maybeSingle();
 
-              if (profileUpsertErr) {
-                console.error("[profiles upsert] error object:", profileUpsertErr);
+              if (profileUpsertErr && (import.meta as any)?.env?.DEV) {
+                console.warn("[profiles upsert] non-fatal:", profileUpsertErr);
               }
             }
             const orderRow: any = {
@@ -1182,8 +1182,8 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
             .select("id")
             .maybeSingle();
 
-          if (profileUpsertErr) {
-            console.error("[profiles upsert] error object:", profileUpsertErr);
+          if (profileUpsertErr && (import.meta as any)?.env?.DEV) {
+            console.warn("[profiles upsert] non-fatal:", profileUpsertErr);
           }
         }
         const orderRow: any = {
