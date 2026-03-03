@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Save, ShieldCheck } from "lucide-react";
+import { HardDrive, Loader2, Save, ShieldCheck, UploadCloud } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -15,9 +15,15 @@ import {
   DEFAULT_TENANT_FISCAL_PROFILE,
   checkFdmsHealth,
   getFiscalProfile,
+  getFiscalSubmissions,
+  listFiscalCredentials,
+  listFiscalDevices,
   type TenantFiscalProfile,
+  upsertFiscalDevice,
   upsertFiscalProfile,
+  uploadFiscalCredential,
 } from "@/lib/fiscalApi";
+import { getOrCreateDeviceId } from "@/lib/deviceLicense";
 
 type Props = {
   canManage: boolean;
@@ -36,6 +42,13 @@ export function ZimraFiscalisationSettings({ canManage }: Props) {
   const [form, setForm] = useState<TenantFiscalProfile>(DEFAULT_TENANT_FISCAL_PROFILE);
   const [addressJsonText, setAddressJsonText] = useState("{}");
   const [lastHealth, setLastHealth] = useState<{ ok: boolean; error?: string } | null>(null);
+  const [certPem, setCertPem] = useState("");
+  const [keyPem, setKeyPem] = useState("");
+  const [caPem, setCaPem] = useState("");
+  const [credEnvironment, setCredEnvironment] = useState<"test" | "prod">("test");
+  const [deviceIdentifier, setDeviceIdentifier] = useState(() => getOrCreateDeviceId());
+  const [fdmsDeviceId, setFdmsDeviceId] = useState("");
+  const localDeviceIdentifier = useMemo(() => getOrCreateDeviceId(), []);
 
   const profileQuery = useQuery({
     queryKey: ["fiscalProfile"],
@@ -43,6 +56,31 @@ export function ZimraFiscalisationSettings({ canManage }: Props) {
     enabled: canManage,
     staleTime: 30_000,
     refetchOnWindowFocus: false,
+  });
+
+  const credentialsQuery = useQuery({
+    queryKey: ["fiscalCredentials"],
+    queryFn: listFiscalCredentials,
+    enabled: canManage,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const devicesQuery = useQuery({
+    queryKey: ["fiscalDevices"],
+    queryFn: listFiscalDevices,
+    enabled: canManage,
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const submissionsQuery = useQuery({
+    queryKey: ["fiscalSubmissions"],
+    queryFn: () => getFiscalSubmissions(),
+    enabled: canManage,
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
+    refetchInterval: 30_000,
   });
 
   useEffect(() => {
@@ -88,6 +126,42 @@ export function ZimraFiscalisationSettings({ canManage }: Props) {
     },
   });
 
+  const uploadCredentialMutation = useMutation({
+    mutationFn: async () =>
+      uploadFiscalCredential({
+        environment: credEnvironment,
+        clientCertPem: certPem,
+        clientKeyPem: keyPem,
+        caCertPem: caPem || undefined,
+        active: true,
+      }),
+    onSuccess: async () => {
+      setCertPem("");
+      setKeyPem("");
+      setCaPem("");
+      await qc.invalidateQueries({ queryKey: ["fiscalCredentials"] });
+      toast.success("FDMS credentials uploaded");
+    },
+    onError: (e: any) => toast.error(e?.message || "Failed to upload credentials"),
+  });
+
+  const saveDeviceMutation = useMutation({
+    mutationFn: async () =>
+      upsertFiscalDevice({
+        deviceIdentifier: deviceIdentifier.trim(),
+        fdmsDeviceId: fdmsDeviceId.trim() || undefined,
+        registrationStatus: "pending",
+        certificateStatus: "pending",
+        configSyncStatus: "pending",
+        dayState: "closed",
+      }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["fiscalDevices"] });
+      toast.success("Fiscal device saved");
+    },
+    onError: (e: any) => toast.error(e?.message || "Failed to save device"),
+  });
+
   if (!canManage) {
     return (
       <Card>
@@ -125,7 +199,7 @@ export function ZimraFiscalisationSettings({ canManage }: Props) {
 
         <CardContent className="space-y-4">
           <div className="text-sm text-muted-foreground">
-            Phase A scaffolding only. FDMS payload schemas and POS receipt flow integration are not enabled yet.
+            Configure tenant profile now, then add credentials + devices before onsite install.
           </div>
 
           {profileQuery.isFetching && !profileQuery.data ? (
@@ -150,7 +224,7 @@ export function ZimraFiscalisationSettings({ canManage }: Props) {
             <div>
               <p className="font-medium">Enable fiscalisation for this tenant</p>
               <p className="text-xs text-muted-foreground">
-                Saves tenant profile only in Phase A. POS flows remain unchanged.
+                Keep disabled until test credentials and one full receipt UAT cycle pass.
               </p>
             </div>
             <Switch
@@ -264,7 +338,7 @@ export function ZimraFiscalisationSettings({ canManage }: Props) {
               <Textarea
                 value={addressJsonText}
                 onChange={(e) => setAddressJsonText(e.target.value)}
-                rows={8}
+                rows={6}
                 className="font-mono text-xs"
                 placeholder='{"line1":"...", "city":"..."}'
               />
@@ -276,6 +350,193 @@ export function ZimraFiscalisationSettings({ canManage }: Props) {
               {saveMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save Fiscal Profile
             </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <UploadCloud className="w-5 h-5" />
+            FDMS Credentials
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label>Credential Environment</Label>
+              <Select value={credEnvironment} onValueChange={(v) => setCredEnvironment(v === "prod" ? "prod" : "test")}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="test">test</SelectItem>
+                  <SelectItem value="prod">prod</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Client Certificate PEM</Label>
+            <Textarea
+              value={certPem}
+              onChange={(e) => setCertPem(e.target.value)}
+              rows={5}
+              className="font-mono text-xs"
+              placeholder="-----BEGIN CERTIFICATE-----"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Client Private Key PEM</Label>
+            <Textarea
+              value={keyPem}
+              onChange={(e) => setKeyPem(e.target.value)}
+              rows={5}
+              className="font-mono text-xs"
+              placeholder="-----BEGIN PRIVATE KEY-----"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>CA Certificate PEM (Optional)</Label>
+            <Textarea
+              value={caPem}
+              onChange={(e) => setCaPem(e.target.value)}
+              rows={4}
+              className="font-mono text-xs"
+              placeholder="-----BEGIN CERTIFICATE-----"
+            />
+          </div>
+
+          <div className="flex justify-end">
+            <Button
+              onClick={() => uploadCredentialMutation.mutate()}
+              disabled={uploadCredentialMutation.isPending || !certPem.trim() || !keyPem.trim()}
+              className="gap-2"
+            >
+              {uploadCredentialMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+              Upload Credential
+            </Button>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Recent Credential Versions</p>
+            <div className="space-y-2">
+              {(credentialsQuery.data || []).map((row) => (
+                <div key={row.id} className="rounded-lg border border-border p-3 text-xs md:text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-medium">
+                      {row.environment.toUpperCase()} v{row.key_version}
+                    </div>
+                    <Badge variant={row.active ? "default" : "outline"}>
+                      {row.active ? "active" : "inactive"}
+                    </Badge>
+                  </div>
+                  <div className="text-muted-foreground mt-1">
+                    rotated: {row.rotated_at || "—"} • updated: {row.updated_at || "—"}
+                  </div>
+                </div>
+              ))}
+              {!credentialsQuery.isLoading && !(credentialsQuery.data || []).length ? (
+                <div className="text-sm text-muted-foreground">No credentials uploaded yet.</div>
+              ) : null}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <HardDrive className="w-5 h-5" />
+            Fiscal Devices
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+            Local device identifier for this machine: <span className="font-mono text-foreground">{localDeviceIdentifier}</span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label>Device Identifier</Label>
+              <Input
+                value={deviceIdentifier}
+                onChange={(e) => setDeviceIdentifier(e.target.value)}
+                placeholder="e.g. verschard-pc-1"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>FDMS Device ID (Optional)</Label>
+              <Input
+                value={fdmsDeviceId}
+                onChange={(e) => setFdmsDeviceId(e.target.value)}
+                placeholder="ZIMRA device ID"
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <Button
+              onClick={() => saveDeviceMutation.mutate()}
+              disabled={saveDeviceMutation.isPending || !deviceIdentifier.trim()}
+            >
+              {saveDeviceMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              Save Device
+            </Button>
+          </div>
+
+          <div className="space-y-2">
+            {(devicesQuery.data || []).map((row) => (
+              <div key={row.id} className="rounded-lg border border-border p-3 text-xs md:text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-medium">{row.device_identifier}</div>
+                  <Badge variant={row.registration_status === "registered" ? "default" : "outline"}>
+                    {row.registration_status}
+                  </Badge>
+                </div>
+                <div className="text-muted-foreground mt-1">
+                  fdms: {row.fdms_device_id || "—"} • cert: {row.certificate_status} • config: {row.config_sync_status} • day: {row.day_state}
+                </div>
+                {row.last_error ? (
+                  <div className="text-red-500 mt-1 text-xs">{row.last_error}</div>
+                ) : null}
+              </div>
+            ))}
+            {!devicesQuery.isLoading && !(devicesQuery.data || []).length ? (
+              <div className="text-sm text-muted-foreground">No fiscal devices registered yet.</div>
+            ) : null}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Submission Queue Monitor</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="text-xs text-muted-foreground">
+            Pending jobs: {(submissionsQuery.data?.jobs || []).filter((j) => j.status === "pending").length} • Dead letters:{" "}
+            {(submissionsQuery.data?.jobs || []).filter((j) => j.status === "dead_letter").length}
+          </div>
+          <div className="space-y-2">
+            {(submissionsQuery.data?.logs || []).slice(0, 8).map((row) => (
+              <div key={row.id} className="rounded-lg border border-border p-3 text-xs md:text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-medium">{row.receipt_number || row.id}</div>
+                  <Badge variant={row.status === "accepted" ? "default" : "outline"}>
+                    {row.status}
+                  </Badge>
+                </div>
+                <div className="text-muted-foreground mt-1">
+                  type: {row.submission_type} • device: {row.device_identifier || row.device_id || "—"} • ref: {row.fdms_reference || "—"}
+                </div>
+                {row.error_message ? <div className="mt-1 text-red-500">{row.error_message}</div> : null}
+              </div>
+            ))}
+            {!submissionsQuery.isLoading && !(submissionsQuery.data?.logs || []).length ? (
+              <div className="text-sm text-muted-foreground">No fiscal submissions yet.</div>
+            ) : null}
           </div>
         </CardContent>
       </Card>

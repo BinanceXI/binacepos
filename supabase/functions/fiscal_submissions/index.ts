@@ -24,6 +24,12 @@ function isAdminRole(role: unknown) {
   return ADMIN_ROLES.has(normalizeRole(role));
 }
 
+function isUuid(v: unknown) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(v || "").trim()
+  );
+}
+
 function nullable(value: unknown, max = 400) {
   const v = String(value ?? "").trim();
   if (!v) return null;
@@ -78,18 +84,20 @@ serve(async (req) => {
     if ("error" in resolved) return resolved.error;
 
     const { admin, caller, userId } = resolved;
-    if (!isAdminRole(caller.role)) return json(403, { error: "Admins only" });
 
     const tenantId = String(caller.business_id || "").trim();
     if (!tenantId) return json(400, { error: "Tenant context missing on your profile" });
 
     if (req.method === "GET") {
+      if (!isAdminRole(caller.role)) return json(403, { error: "Admins only" });
       const url = new URL(req.url);
       const status = nullable(url.searchParams.get("status"), 32);
 
       let q = admin
         .from("fdms_submission_logs")
-        .select("id, tenant_id, device_id, submission_type, request_hash, idempotency_key, status, fdms_reference, response_excerpt, error_message, created_at, updated_at")
+        .select(
+          "id, tenant_id, device_id, device_identifier, order_id, receipt_id, receipt_number, submission_type, request_hash, idempotency_key, status, fdms_reference, response_excerpt, error_message, created_at, updated_at"
+        )
         .eq("tenant_id", tenantId)
         .order("created_at", { ascending: false })
         .limit(200);
@@ -114,10 +122,59 @@ serve(async (req) => {
       return json(400, { error: "submissionType must be receipt or file" });
     }
 
+    const { data: profileRow, error: profileErr } = await admin
+      .from("tenant_fiscal_profiles")
+      .select("enabled")
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (profileErr) return json(500, { error: "Failed to resolve tenant fiscal profile" });
+    if (!profileRow || profileRow.enabled !== true) {
+      return json(409, { error: "Fiscalisation is disabled for this tenant" });
+    }
+
     const requestPayload = body?.requestPayload ?? body?.payload ?? {};
     const idempotencyKey = nullable(body?.idempotencyKey, 200) || `idem-${crypto.randomUUID()}`;
     const requestHash = nullable(body?.requestHash, 200) || hashPayload(requestPayload);
-    const deviceId = nullable(body?.deviceId, 64);
+    let deviceId = nullable(body?.deviceId, 64);
+    const deviceIdentifier = nullable(body?.deviceIdentifier, 255);
+    const orderId = nullable(body?.orderId, 64);
+    const receiptId = nullable(body?.receiptId, 255);
+    const receiptNumber = nullable(body?.receiptNumber, 255);
+
+    if (deviceId && !isUuid(deviceId)) {
+      deviceId = null;
+    }
+
+    if (!deviceId && deviceIdentifier) {
+      const { data: devRow } = await admin
+        .from("fdms_devices")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("device_identifier", deviceIdentifier)
+        .maybeSingle();
+      if (devRow?.id) deviceId = String(devRow.id);
+    }
+
+    const { data: existing } = await admin
+      .from("fdms_submission_logs")
+      .select(
+        "id, tenant_id, device_id, device_identifier, order_id, receipt_id, receipt_number, submission_type, request_hash, idempotency_key, status, fdms_reference, response_excerpt, error_message, created_at, updated_at"
+      )
+      .eq("tenant_id", tenantId)
+      .eq("idempotency_key", idempotencyKey)
+      .maybeSingle();
+
+    if (existing) {
+      const { data: jobData } = await admin
+        .from("fdms_retry_jobs")
+        .select("id, submission_log_id, job_type, status, attempt_count, max_attempts, next_run_at, last_error, dead_letter_reason, created_at, updated_at")
+        .eq("submission_log_id", String(existing.id))
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      return json(200, { ok: true, log: existing, retryJob: jobData || null, duplicate: true });
+    }
+
     const initialStatus = ["queued", "submitted", "accepted", "rejected", "failed"].includes(
       String(body?.status || "")
     )
@@ -129,13 +186,19 @@ serve(async (req) => {
       .insert({
         tenant_id: tenantId,
         device_id: deviceId,
+        device_identifier: deviceIdentifier,
+        order_id: isUuid(orderId) ? orderId : null,
+        receipt_id: receiptId,
+        receipt_number: receiptNumber,
         submission_type: submissionType,
         request_hash: requestHash,
         idempotency_key: idempotencyKey,
         status: initialStatus,
         request_payload: requestPayload,
       })
-      .select("id, tenant_id, device_id, submission_type, request_hash, idempotency_key, status, fdms_reference, response_excerpt, error_message, created_at, updated_at")
+      .select(
+        "id, tenant_id, device_id, device_identifier, order_id, receipt_id, receipt_number, submission_type, request_hash, idempotency_key, status, fdms_reference, response_excerpt, error_message, created_at, updated_at"
+      )
       .single();
 
     if (insErr) return json(500, { error: "Failed to create submission log" });

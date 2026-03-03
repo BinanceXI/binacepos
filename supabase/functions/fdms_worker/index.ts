@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { getSupabaseEnv, supabaseAdminClient } from "../_shared/supabase.ts";
-import { fdmsClient } from "../_shared/fdms.ts";
+import { getTenantFdmsClient } from "../_shared/fdms.ts";
 
 function sanitizeExcerpt(value: unknown, max = 500) {
   if (value == null) return null;
@@ -17,6 +17,43 @@ function nextBackoff(attempt: number) {
 function mapAcceptedStatus(jobType: string) {
   if (jobType === "status_poll") return "submitted";
   return "submitted";
+}
+
+function readAny(obj: any, keys: string[]) {
+  for (const key of keys) {
+    if (obj == null || typeof obj !== "object") continue;
+    if (obj[key] != null && String(obj[key]).trim()) return obj[key];
+  }
+  return null;
+}
+
+function classifySubmissionResult(response: unknown): "accepted" | "rejected" | "submitted" {
+  if (!response) return "submitted";
+  const txt =
+    typeof response === "string"
+      ? response.toLowerCase()
+      : JSON.stringify(response).toLowerCase();
+  if (txt.includes("reject") || txt.includes("declin") || txt.includes("invalid")) return "rejected";
+  if (txt.includes("accept") || txt.includes("approved") || txt.includes("success")) return "accepted";
+  return "submitted";
+}
+
+function extractFdmsReference(response: unknown): string | null {
+  if (!response || typeof response !== "object") return null;
+  const v = readAny(response as any, [
+    "fdms_reference",
+    "fdmsReference",
+    "reference",
+    "referenceNo",
+    "referenceNumber",
+    "receiptGlobalNo",
+    "receipt_global_no",
+    "receiptCounter",
+    "receipt_counter",
+  ]);
+  if (v == null) return null;
+  const out = String(v).trim();
+  return out || null;
 }
 
 serve(async (req) => {
@@ -79,21 +116,32 @@ serve(async (req) => {
         const payload = (submission as any).request_payload ?? {};
         let response: unknown;
 
+        const tenantClient = await getTenantFdmsClient({
+          admin,
+          tenantId: String((submission as any).tenant_id || (job as any).tenant_id || ""),
+        });
         if ((job as any).job_type === "submit_file") {
-          response = await fdmsClient.submitFile(payload);
+          response = await tenantClient.submitFile(payload);
         } else if ((job as any).job_type === "status_poll") {
-          response = await fdmsClient.getFileStatus(payload);
+          response = await tenantClient.getFileStatus(payload);
         } else {
-          response = await fdmsClient.submitReceipt(payload);
+          response = await tenantClient.submitReceipt(payload);
         }
+
+        const nextStatus =
+          (job as any).job_type === "status_poll"
+            ? mapAcceptedStatus(String((job as any).job_type || ""))
+            : classifySubmissionResult(response);
+        const fdmsReference = extractFdmsReference(response);
 
         await admin
           .from("fdms_submission_logs")
           .update({
-            status: mapAcceptedStatus(String((job as any).job_type || "")),
+            status: nextStatus,
+            fdms_reference: fdmsReference,
             response_payload: response,
             response_excerpt: sanitizeExcerpt(response),
-            error_message: null,
+            error_message: nextStatus === "rejected" ? "Rejected by FDMS" : null,
             updated_at: new Date().toISOString(),
           })
           .eq("id", (submission as any).id);

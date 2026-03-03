@@ -28,6 +28,8 @@ import {
   saveCachedRecentReceipts,
   saveCachedSettings,
 } from "@/lib/offlineRuntimeCache";
+import { queueFiscalReceiptSubmission } from "@/lib/fiscalApi";
+import { getOrCreateDeviceId } from "@/lib/deviceLicense";
 
 /* ---------------------------------- USER TYPES --------------------------------- */
 export type Role = "platform_admin" | "master_admin" | "super_admin" | "admin" | "cashier";
@@ -673,6 +675,68 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
     ]);
   }, [queryClient]);
 
+  const enqueueFiscalForOrder = useCallback(
+    async (args: {
+      orderId: string;
+      sale: {
+        cashierId: string;
+        customerName?: string;
+        payments: Payment[];
+        items: CartItem[];
+        total: number;
+        meta: SaleMeta;
+      };
+      totals: { subtotal: number; discount: number; tax: number };
+    }) => {
+      const orderId = String(args.orderId || "").trim();
+      if (!orderId) return;
+
+      const receiptId = String(args.sale.meta?.receiptId || "").trim();
+      const receiptNumber = String(args.sale.meta?.receiptNumber || "").trim();
+      if (!receiptId || !receiptNumber) return;
+
+      const payload = {
+        orderId,
+        receiptId,
+        receiptNumber,
+        timestamp: new Date(args.sale.meta?.timestamp || Date.now()).toISOString(),
+        cashierId: String(args.sale.cashierId || "").trim(),
+        customerName: String(args.sale.customerName || "Walk-in").trim() || "Walk-in",
+        paymentMethod: String(args.sale.payments?.[0]?.method || "cash"),
+        totals: {
+          subtotal: Number(args.totals.subtotal || 0),
+          discount: Number(args.totals.discount || 0),
+          tax: Number(args.totals.tax || 0),
+          total: Number(args.sale.total || 0),
+        },
+        items: (args.sale.items || []).map((i: any) => ({
+          productId: String(i?.product?.id || "").trim(),
+          productName: String(i?.product?.name || "Item"),
+          qty: Number(i?.quantity || 0),
+          unitPrice: Number(i?.customPrice ?? i?.product?.price ?? 0),
+          lineTotal: Number(i?.quantity || 0) * Number(i?.customPrice ?? i?.product?.price ?? 0),
+        })),
+      };
+
+      const result = await queueFiscalReceiptSubmission({
+        orderId,
+        receiptId,
+        receiptNumber,
+        deviceIdentifier: getOrCreateDeviceId(),
+        requestPayload: payload,
+      });
+
+      if (!result.ok && !result.skipped && (import.meta as any)?.env?.DEV) {
+        console.warn("[fiscal] failed to queue receipt submission", {
+          orderId,
+          receiptId,
+          error: result.error,
+        });
+      }
+    },
+    []
+  );
+
   /* ------------------------------ OFFLINE SYNC ------------------------------ */
 
   const processOfflineQueue = useCallback(async (opts?: { silent?: boolean }) => {
@@ -782,6 +846,19 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
           );
           if (itemsErr) throw itemsErr;
 
+          await enqueueFiscalForOrder({
+            orderId,
+            sale,
+            totals: {
+              subtotal: sale.items.reduce((sum, line: any) => {
+                const unit = Number(line?.customPrice ?? line?.product?.price ?? 0);
+                return sum + unit * Number(line?.quantity || 0);
+              }, 0),
+              discount: 0,
+              tax: 0,
+            },
+          });
+
           await decrementStockForItems(saleItems);
           await invalidateSalesQueries();
         } catch (e: any) {
@@ -804,7 +881,7 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
       if (toastId != null) toast.dismiss(toastId);
       syncingRef.current = false;
     }
-  }, [invalidateSalesQueries, refreshPendingSyncCount]);
+  }, [enqueueFiscalForOrder, invalidateSalesQueries, refreshPendingSyncCount]);
 
   const runGlobalSync = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -1231,6 +1308,26 @@ export const POSProvider = ({ children }: { children: ReactNode }) => {
         );
 
         if (itemsErr) throw itemsErr;
+
+        await enqueueFiscalForOrder({
+          orderId,
+          sale: {
+            cashierId: String(cashierId || saleData.cashierId),
+            customerName: saleData.customerName,
+            payments: saleData.payments,
+            items: saleItems,
+            total: saleData.total,
+            meta: saleData.meta,
+          },
+          totals: {
+            subtotal: saleItems.reduce((sum, line: any) => {
+              const unit = Number(line?.customPrice ?? line?.product?.price ?? 0);
+              return sum + unit * Number(line?.quantity || 0);
+            }, 0),
+            discount: 0,
+            tax: 0,
+          },
+        });
 
         await decrementStockForItems(saleItems);
 
